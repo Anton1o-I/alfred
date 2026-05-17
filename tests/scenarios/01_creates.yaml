@@ -1,0 +1,161 @@
+# Create-event scenarios across phrasing styles and detail levels.
+# "today" is always pinned so relative dates resolve deterministically.
+# Sunday 2026-05-17 anchors: tomorrow = Monday May 18, next Monday = May 25.
+
+# ── Specific & explicit ────────────────────────────────────────────────────
+
+- name: explicit_date_time_person
+  email: |
+    Schedule lunch with Sarah next Wednesday at 12:30pm
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["Sarah"]
+    event_summary_excludes: ["Schedule", "Add"]
+    event_start_iso: "2026-05-20T12:30:00-05:00"
+    calendar_count_after: 1
+    has_recurrence: false
+
+- name: explicit_calendar_date_with_duration
+  email: |
+    Add a doctor appointment May 19 at 2:30pm for 45 minutes
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["doctor"]
+    event_summary_excludes: ["Add"]
+    calendar_count_after: 1
+
+- name: time_range_specified
+  email: |
+    Schedule a strategy review on Tuesday from 2 to 4pm
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["strategy"]
+    calendar_count_after: 1
+
+- name: terse_one_liner
+  email: |
+    Coffee w/ Eric Tue 10am
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["Eric"]
+    calendar_count_after: 1
+
+# ── Casual phrasing ────────────────────────────────────────────────────────
+
+- name: casual_phrasing
+  email: |
+    hey can you put a 30 min sync with the design team on my calendar
+    monday at 3 please
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["design"]
+    event_summary_excludes: ["put", "calendar", "please"]
+    calendar_count_after: 1
+
+- name: imperative_no_filler
+  email: |
+    Block 9-10am tomorrow for deep work
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["deep work"]
+    event_start_iso: "2026-05-18T09:00:00-05:00"
+    calendar_count_after: 1
+
+- name: tomorrow_at_noon
+  email: |
+    Add team standup tomorrow at noon
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["standup"]
+    event_start_iso: "2026-05-18T12:00:00-05:00"
+    calendar_count_after: 1
+
+# ── With location ──────────────────────────────────────────────────────────
+
+- name: with_physical_location
+  email: |
+    Lunch with my brother Wednesday at 1pm at Cafe Luna
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["brother"]
+    calendar_count_after: 1
+
+- name: with_video_link
+  email: |
+    Schedule a 30 min call with Priya next Friday at 10am, zoom
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["Priya"]
+    calendar_count_after: 1
+
+# ── Ambiguous → clarification ──────────────────────────────────────────────
+
+- name: vague_next_week
+  email: |
+    Schedule a meeting next week
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: incomplete
+    calendar_count_after: 0
+    reply_contains: ["details"]
+
+- name: missing_time
+  email: |
+    Coffee with Eric tomorrow
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: incomplete
+    calendar_count_after: 0
+
+- name: missing_day
+  email: |
+    Meeting at 3pm to review the budget
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: incomplete
+    calendar_count_after: 0
+
+# ── Tricky relative dates ──────────────────────────────────────────────────
+
+- name: relative_next_one_exclusion
+  email: |
+    Book lunch with Emily Monday, not tomorrow, the next one, 12pm
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["Emily"]
+    event_start_iso: "2026-05-25T12:00:00-05:00"
+    calendar_count_after: 1
+
+- name: this_friday
+  email: |
+    Block 3pm this Friday for a focus session, 90 minutes
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["focus"]
+    event_start_iso: "2026-05-22T15:00:00-05:00"
+    calendar_count_after: 1

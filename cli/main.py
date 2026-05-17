@@ -66,6 +66,58 @@ def run_routine(name: str, compare: bool, max_items: int | None) -> None:
 
 
 @main.command()
+@click.option(
+    "--file",
+    "file_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to a YAML scenario file or directory. Default: tests/scenarios/",
+)
+@click.option(
+    "--scenario",
+    "scenario_name",
+    default=None,
+    help="Run only the named scenario.",
+)
+@click.option("--verbose", "-v", is_flag=True)
+def simulate(
+    file_path: Path | None, scenario_name: str | None, verbose: bool
+) -> None:
+    """Run calendar scenarios against an in-memory calendar.
+
+    Real LLM (Qwen by default), fake I/O. Useful for catching prompt /
+    routing regressions before hitting iCloud. Scenarios live in
+    tests/scenarios/*.yaml.
+    """
+    asyncio.run(_run_simulation(file_path, scenario_name, verbose))
+
+
+async def _run_simulation(
+    file_path: Path | None, scenario_name: str | None, verbose: bool
+) -> None:
+    from sim.runner import load_scenarios, print_report, run_scenarios
+
+    target = file_path or (Path(__file__).resolve().parent.parent / "tests" / "scenarios")
+    scenarios = load_scenarios(target)
+    if scenario_name:
+        scenarios = [s for s in scenarios if s.name == scenario_name]
+        if not scenarios:
+            click.echo(f"No scenario found matching name: {scenario_name}")
+            return
+
+    app = await _get_app()
+    try:
+        results = await run_scenarios(
+            scenarios,
+            litellm_client=app.litellm_client,
+            verbose=verbose,
+        )
+        print_report(results)
+    finally:
+        await app.shutdown()
+
+
+@main.command()
 def topics() -> None:
     """List active topic interests."""
     asyncio.run(_show_topics())

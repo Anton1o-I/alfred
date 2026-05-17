@@ -1,0 +1,80 @@
+# Recurring-event scenarios. Recurring events skip the conflict check
+# (they collide naturally over time) and emit an RRULE on the iCal.
+
+- name: weekly_specific_day
+  email: |
+    Schedule a weekly standup every Monday at 9am for 15 minutes
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["standup"]
+    has_recurrence: true
+    calendar_count_after: 1
+
+- name: bi_weekly
+  email: |
+    Add a 1:1 with my manager every other Tuesday at 11am
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["1:1"]
+    has_recurrence: true
+    calendar_count_after: 1
+
+- name: monthly
+  email: |
+    Block off the first Monday of every month at 10am for team retro,
+    one hour
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["retro"]
+    has_recurrence: true
+
+- name: weekly_multiple_days
+  email: |
+    Schedule yoga every Tuesday and Thursday at 7am for 45 minutes
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    event_summary_contains: ["yoga"]
+    has_recurrence: true
+
+- name: recurring_skips_conflict_check
+  email: |
+    Add a weekly date night every Friday at 7pm
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Movie with kids"
+      start: "2026-05-22T19:00:00-05:00"
+      end:   "2026-05-22T20:00:00-05:00"
+  expect:
+    outcome: created
+    has_recurrence: true
+    # No Heads-up section even though Friday 7pm overlaps an existing event,
+    # because recurring events skip the conflict check.
+    reply_excludes: ["Heads up"]
+
+# ── One-off events that mention frequency words (negative cases) ───────────
+
+- name: not_recurring_one_word_off
+  email: |
+    Add lunch with Sarah Wednesday at 12:30pm
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    has_recurrence: false
+
+- name: not_recurring_says_once
+  email: |
+    Schedule a one-time strategy meeting next Tuesday at 2pm
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: created
+    has_recurrence: false

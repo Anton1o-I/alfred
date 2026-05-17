@@ -374,8 +374,14 @@ def build_calendar_graph(
     timezone_name: str,
     litellm_client: LiteLLMClient,
     model_name: str = "local-default",
+    now_fn: Any = None,
 ) -> Any:
-    """Compile the calendar workflow with deps closed over."""
+    """Compile the calendar workflow with deps closed over.
+
+    `now_fn` overrides the source of "today" for the enrich node — pass a
+    zero-arg callable returning a timezone-aware datetime when running
+    simulations against fixed dates. Defaults to `datetime.now(tz)`.
+    """
     intent_agent = _make_specialist(litellm_client, model_name, IntentClassification)
     parse_agent = _make_specialist(litellm_client, model_name, EventDraft)
     delete_parse_agent = _make_specialist(litellm_client, model_name, DeleteTarget)
@@ -385,7 +391,7 @@ def build_calendar_graph(
 
     async def enrich_with_date_context(state: CalendarState) -> dict:
         tz = ZoneInfo(timezone_name)
-        now = datetime.now(tz)
+        now = now_fn() if now_fn is not None else datetime.now(tz)
         today = now.date()
         upcoming = [
             {

@@ -37,6 +37,8 @@ Thumbs.db
 
 # Data and logs
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 logs/
 *.log

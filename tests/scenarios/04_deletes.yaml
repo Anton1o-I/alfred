@@ -1,0 +1,91 @@
+# Delete scenarios. The workflow uses LLM reasoning to pick the best
+# match with high/medium/low/none confidence. High → delete. Medium →
+# confirmation request. Low/none → ask to clarify.
+
+- name: delete_unique_title_match
+  email: |
+    Cancel the strategy review on Tuesday
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Strategy review"
+      start: "2026-05-19T14:00:00-05:00"
+      end:   "2026-05-19T15:00:00-05:00"
+  expect:
+    outcome: deleted
+    calendar_count_after: 0
+
+- name: delete_via_location_field
+  email: |
+    Cancel the meeting with Wayne this Friday
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Business meeting"
+      start: "2026-05-22T15:00:00-05:00"
+      end:   "2026-05-22T16:00:00-05:00"
+      location: "with John Wayne"
+  expect:
+    outcome: deleted
+    calendar_count_after: 0
+
+- name: delete_no_matching_event_on_date
+  email: |
+    Cancel my appointment with Dr. Smith this Friday
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Lunch with Sarah"
+      start: "2026-05-22T12:00:00-05:00"
+      end:   "2026-05-22T13:00:00-05:00"
+  expect:
+    outcome: delete_not_found
+    calendar_count_after: 1
+    reply_contains: ["couldn't"]
+
+- name: delete_no_events_at_all
+  email: |
+    Delete the standup tomorrow
+  today: "2026-05-17"
+  initial_calendar: []
+  expect:
+    outcome: delete_not_found
+    calendar_count_after: 0
+
+- name: delete_recurring_one_instance
+  email: |
+    Cancel the date night this Friday
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Date Night"
+      start: "2026-05-22T19:00:00-05:00"
+      end:   "2026-05-22T20:00:00-05:00"
+  expect:
+    outcome: deleted
+    calendar_count_after: 0
+
+- name: delete_terse
+  email: |
+    cancel coffee w/ eric tue
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Coffee with Eric"
+      start: "2026-05-19T10:00:00-05:00"
+      end:   "2026-05-19T11:00:00-05:00"
+  expect:
+    outcome: deleted
+    calendar_count_after: 0
+
+- name: delete_ambiguous_two_lunches
+  email: |
+    Cancel lunch
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Lunch with Sarah"
+      start: "2026-05-19T12:00:00-05:00"
+      end:   "2026-05-19T13:00:00-05:00"
+    - title: "Lunch with Emily"
+      start: "2026-05-21T12:30:00-05:00"
+      end:   "2026-05-21T13:30:00-05:00"
+  # Without a date or name hint there are two plausible matches —
+  # the agent should not auto-delete. Medium confidence or none-found.
+  expect:
+    calendar_count_after: 2
+    reply_excludes: ["Event removed"]

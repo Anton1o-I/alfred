@@ -84,6 +84,7 @@ class CalendarAgent(AgentBase):
         litellm_client: LiteLLMClient,
         calendar_config: CalendarConfig,
         notification_service: Any = None,  # noqa: ARG002 — kept for registry signature compat
+        now_fn: Any = None,  # optional override for "today" in the workflow (simulation)
     ) -> None:
         self._client = google_client
         self._config = calendar_config
@@ -95,6 +96,7 @@ class CalendarAgent(AgentBase):
             timezone_name=calendar_config.timezone,
             litellm_client=litellm_client,
             model_name="local-default",
+            now_fn=now_fn,
         )
 
     async def run(self, message: str, context: AgentContext) -> AgentResult:  # noqa: ARG002
