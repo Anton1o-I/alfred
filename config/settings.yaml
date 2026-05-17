@@ -39,7 +39,7 @@ inbox:
 
 scheduled_tasks:
   - name: "inbox_poll"
-    cron: "*/5 * * * *"  # Every 5 minutes
+    cron: "* * * * *"  # Every minute — keeps perceived latency under ~30s
     agent_name: "inbox"
     message: "Poll inbox for inbound emails"
     enabled: true
