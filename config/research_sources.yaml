@@ -1,0 +1,152 @@
+# Research curator sources.
+#
+# Each entry is a content source the curator pulls from. Currently supports:
+#   type: rss        — standard RSS/Atom feed
+#   type: arxiv      — arXiv RSS by category (cs.LG, cs.CL, cs.AI, etc.)
+#
+# `topic_hints` is a list of topic IDs (from research_topics.yaml). The triage
+# step uses these as a prior — content from a feed tagged with a topic is more
+# likely to be classified into that topic. It's a hint, not a hard mapping.
+#
+# Add or remove sources here; the agent picks them up at next run.
+
+sources:
+  # ── Foundation model labs ─────────────────────────────────
+  # Anthropic, Meta AI, and Mistral AI do not publish working RSS feeds
+  # (verified 2026-05-17). Coverage of their releases comes via the
+  # newsletters in the "Industry analysis" section below (Import AI,
+  # Latent Space, Last Week in AI), all of which cover major lab releases.
+  - name: "OpenAI Blog"
+    type: rss
+    url: "https://openai.com/blog/rss.xml"
+    topic_hints: [foundation_models, ai_agents]
+
+  - name: "Google DeepMind"
+    type: rss
+    url: "https://deepmind.google/blog/rss.xml"
+    topic_hints: [foundation_models, ml_research, ai_safety]
+
+  # ── ML research ──────────────────────────────────────────
+  - name: "arXiv cs.LG (Machine Learning)"
+    type: arxiv
+    category: "cs.LG"
+    topic_hints: [ml_research]
+
+  - name: "arXiv cs.CL (Computation and Language)"
+    type: arxiv
+    category: "cs.CL"
+    topic_hints: [ml_research, foundation_models]
+
+  - name: "arXiv cs.AI (Artificial Intelligence)"
+    type: arxiv
+    category: "cs.AI"
+    topic_hints: [ml_research, ai_agents]
+
+  - name: "Hugging Face Papers"
+    type: rss
+    url: "https://huggingface.co/papers"
+    topic_hints: [ml_research, foundation_models]
+
+  # ── AI engineering / MLOps ───────────────────────────────
+  - name: "Sebastian Raschka"
+    type: rss
+    url: "https://sebastianraschka.com/rss_feed.xml"
+    topic_hints: [ml_research, ai_engineering]
+
+  - name: "Chip Huyen"
+    type: rss
+    url: "https://huyenchip.com/feed.xml"
+    topic_hints: [ai_engineering, enterprise_adoption]
+
+  - name: "Eugene Yan"
+    type: rss
+    url: "https://eugeneyan.com/rss/"
+    topic_hints: [ai_engineering, ml_research]
+
+  - name: "Hamel Husain"
+    type: rss
+    url: "https://hamel.dev/index.xml"
+    topic_hints: [ai_engineering]
+
+  - name: "Lilian Weng"
+    type: rss
+    url: "https://lilianweng.github.io/index.xml"
+    topic_hints: [ai_agents, ml_research]
+
+  # ── Infrastructure & economics ───────────────────────────
+  - name: "SemiAnalysis"
+    type: rss
+    url: "https://www.semianalysis.com/feed"
+    topic_hints: [ai_infrastructure]
+
+  # ── Enterprise adoption ──────────────────────────────────
+  # a16z.com no longer exposes a WordPress feed (verified 2026-05-17).
+  # Their newer content lives on Substack publications listed below
+  # (Future is a16z's editorial home for enterprise/tech analysis).
+  - name: "MIT Sloan Review"
+    type: rss
+    url: "https://sloanreview.mit.edu/feed/"
+    topic_hints: [enterprise_adoption, ai_governance]
+
+  # ── Data platforms ───────────────────────────────────────
+  # Benn Stancil — Substack at benn.substack.com/feed is blocked by
+  # Cloudflare bot protection. Dropped 2026-05-17. Revisit with
+  # curl_cffi or a feed proxy if coverage gap becomes painful.
+
+  - name: "dbt Labs Blog"
+    type: rss
+    url: "https://www.getdbt.com/blog/rss.xml"
+    topic_hints: [data_platforms]
+
+  # ── Governance & policy ──────────────────────────────────
+  - name: "Stanford HAI"
+    type: rss
+    url: "https://hai.stanford.edu/news/rss.xml"
+    topic_hints: [ai_governance, ai_safety]
+
+  # ── Safety & alignment ───────────────────────────────────
+  # Anthropic Research does not publish a working RSS feed (verified
+  # 2026-05-17). Coverage comes via Stanford HAI above and via Import AI
+  # below (Jack Clark, Anthropic co-founder, weekly).
+
+  # ── Industry analysis / newsletters ──────────────────────
+  # Added 2026-05-17 to replace dropped foundation-lab feeds. These
+  # newsletters provide weekly digest-style coverage of Anthropic, Meta,
+  # Mistral, and a16z releases that we lost when their RSS endpoints
+  # went away. URLs below follow standard Substack patterns but should
+  # be verified on first run — drop any that 404.
+  # Import AI (Jack Clark) — Substack at importai.substack.com/feed
+  # is blocked by Cloudflare bot protection (not just User-Agent: TLS
+  # fingerprint + frame ordering). Dropped 2026-05-17. Revisit with
+  # curl_cffi or a feed proxy if coverage gap becomes painful.
+
+  - name: "Latent Space (swyx)"
+    type: rss
+    url: "https://www.latent.space/feed"
+    topic_hints: [foundation_models, ai_engineering, enterprise_adoption]
+
+  - name: "Last Week in AI"
+    type: rss
+    url: "https://lastweekin.ai/feed"
+    topic_hints: [foundation_models, ml_research]
+
+  - name: "Simon Willison"
+    type: rss
+    url: "https://simonwillison.net/atom/everything/"
+    topic_hints: [ai_engineering, foundation_models]
+
+  - name: "Future (a16z)"
+    type: rss
+    url: "https://future.com/feed/"
+    topic_hints: [enterprise_adoption, ai_infrastructure]
+
+  # ── Adjacent tech ────────────────────────────────────────
+  - name: "Hacker News (Top)"
+    type: rss
+    url: "https://hnrss.org/frontpage?points=300"
+    topic_hints: [adjacent_breakthroughs, ai_engineering]
+
+  - name: "IEEE Spectrum"
+    type: rss
+    url: "https://spectrum.ieee.org/feeds/feed.rss"
+    topic_hints: [adjacent_breakthroughs]

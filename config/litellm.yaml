@@ -2,15 +2,15 @@ model_list:
   # ── Local models (Ollama on homelab) ──────────────────────
   - model_name: local-default
     litellm_params:
-      model: ollama/phi4:14b-q4_K_M
-      api_base: ${OLLAMA_BASE_URL:=http://homelab.local:11434}
+      model: ollama/qwen2.5:14b-instruct-q4_K_M
+      api_base: os.environ/OLLAMA_BASE_URL
       timeout: 120
       max_tokens: 4096
 
   - model_name: local-fast
     litellm_params:
-      model: ollama/phi4:14b-q4_K_M
-      api_base: ${OLLAMA_BASE_URL:=http://homelab.local:11434}
+      model: ollama/qwen2.5:14b-instruct-q4_K_M
+      api_base: os.environ/OLLAMA_BASE_URL
       timeout: 60
       max_tokens: 2048
 
@@ -37,10 +37,11 @@ router_settings:
   retry_after: 5
   allowed_fails: 2
 
-  # Fallback chain: try local first, fall back to cloud
-  fallbacks:
-    - local-default: ["cloud-default"]
-    - local-fast: ["cloud-default"]
+  # NO automatic fallback from local to cloud. Cloud (Anthropic) is opt-in
+  # only — a request must explicitly target `cloud-default` or `cloud-strong`
+  # to spend money. If local fails, the request fails loudly so the agent
+  # (or the user) can decide whether to escalate.
+  fallbacks: []
 
 # ── General settings ─────────────────────────────────────────
 general_settings:

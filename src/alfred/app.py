@@ -164,3 +164,18 @@ def _register_agents(
             registry.register(agent, cal_config)
         except Exception as e:
             log.warning("calendar_agent_init_failed", error=str(e))
+
+    # Curator agent (research/learning reading-list digest)
+    cur_config = settings.agents.get("curator")
+    if cur_config and cur_config.enabled:
+        try:
+            from alfred.agents.curator import CuratorAgent, CuratorConfig
+
+            curator_config = CuratorConfig.load(config_dir)
+            agent = CuratorAgent(
+                litellm_client=litellm_client,
+                config=curator_config,
+            )
+            registry.register(agent, cur_config)
+        except Exception as e:
+            log.warning("curator_agent_init_failed", error=str(e))

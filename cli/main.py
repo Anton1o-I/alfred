@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import click
 import structlog
@@ -42,9 +43,14 @@ def scheduler() -> None:
 
 @main.command(name="run-routine")
 @click.argument("name")
-def run_routine(name: str) -> None:
+@click.option(
+    "--compare",
+    is_flag=True,
+    help="For curator: run synthesis through both local and cloud, write A/B file.",
+)
+def run_routine(name: str, compare: bool) -> None:
     """Fire a single named routine once (for systemd timers, ad-hoc testing)."""
-    raise SystemExit(asyncio.run(_run_routine_once(name)))
+    raise SystemExit(asyncio.run(_run_routine_once(name, compare=compare)))
 
 
 @main.command()
@@ -72,6 +78,36 @@ def remove_topic(name: str) -> None:
 def health() -> None:
     """Check health of all services (LiteLLM, BlueBubbles, etc.)."""
     asyncio.run(_health_check())
+
+
+@main.group()
+def prompts() -> None:
+    """Inspect the versioned prompt registry."""
+
+
+@prompts.command(name="list")
+def prompts_list() -> None:
+    """List all prompts with their active version."""
+    from alfred.prompts import list_prompts
+
+    for p in list_prompts():
+        click.echo(f"{p.id:30s}  active={p.active_version:6s}  versions={p.all_versions}")
+        click.echo(f"  {p.description.strip()}")
+
+
+@prompts.command(name="show")
+@click.argument("prompt_id")
+@click.option("--version", default=None, help="Specific version (default: active).")
+def prompts_show(prompt_id: str, version: str | None) -> None:
+    """Show the full body of a prompt at a specific version."""
+    from alfred.prompts import load_prompt
+
+    p = load_prompt(prompt_id, version=version)
+    click.echo(f"# {p.fqn}  ({p.status})")
+    click.echo(f"# author: {p.author}    created: {p.created}")
+    click.echo(f"# changelog: {p.changelog.strip()}")
+    click.echo()
+    click.echo(p.body)
 
 
 @main.command()
@@ -144,7 +180,7 @@ async def _chat_loop() -> None:
             request = AgentRequest(
                 source=RequestSource.CLI,
                 user_message=user_input,
-                user_id="andres",
+                user_id=os.environ.get("ALFRED_USER_ID", "primary"),
             )
 
             response = await app.orchestrator.handle(request)
@@ -164,7 +200,7 @@ async def _ask(message: str) -> None:
         request = AgentRequest(
             source=RequestSource.CLI,
             user_message=message,
-            user_id="andres",
+            user_id=os.environ.get("ALFRED_USER_ID", "primary"),
         )
         response = await app.orchestrator.handle(request)
         click.echo(f"[{response.agent_name}] {response.message}")
@@ -198,12 +234,12 @@ async def _run_scheduler() -> None:
         await app.shutdown()
 
 
-async def _run_routine_once(name: str) -> int:
+async def _run_routine_once(name: str, compare: bool = False) -> int:
     from alfred.scheduler.runner import run_routine_by_name
 
     app = await _get_app()
     try:
-        return await run_routine_by_name(app, name)
+        return await run_routine_by_name(app, name, compare=compare)
     finally:
         await app.shutdown()
 

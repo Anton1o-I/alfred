@@ -29,6 +29,8 @@ dependencies = [
     "google-auth-httplib2>=0.2",
     # Scheduling
     "apscheduler>=3.10",
+    # Research curator (RSS + arXiv ingestion)
+    "feedparser>=6.0",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,81 @@
+# Research curator topics.
+#
+# The curator triages incoming items against these topics, scores their
+# relevance to user_context.yaml, and surfaces the top N in each digest.
+# Add or remove topics here; the agent picks them up at next run.
+#
+# `weight` biases how aggressively items in this topic should be surfaced
+# (1.0 = neutral, >1.0 = more, <1.0 = less). The curator's relevance score
+# is multiplied by this weight before ranking.
+
+topics:
+  - id: foundation_models
+    name: "Foundation model releases & capabilities"
+    description: >
+      New models from Anthropic, OpenAI, Google, Meta, Mistral; major capability
+      shifts; benchmark results; pricing/availability changes.
+    weight: 1.0
+
+  - id: ml_research
+    name: "ML research breakthroughs"
+    description: >
+      Influential arXiv papers on training methods, architectures, scaling laws,
+      reinforcement learning, alignment. Prefer papers with broad implications
+      over narrow improvements.
+    weight: 1.0
+
+  - id: ai_agents
+    name: "AI agents & autonomy"
+    description: >
+      Agent frameworks, multi-agent systems, tool use, planning, long-horizon
+      reasoning. Both research and production patterns.
+    weight: 1.2
+
+  - id: ai_engineering
+    name: "AI engineering & MLOps"
+    description: >
+      Production patterns, eval frameworks, RAG, vector stores, inference
+      optimization, observability for LLM systems.
+    weight: 1.0
+
+  - id: ai_infrastructure
+    name: "AI infrastructure & economics"
+    description: >
+      GPUs and chips, training/inference costs, open-weights ecosystem economics,
+      hyperscaler positioning.
+    weight: 0.8
+
+  - id: enterprise_adoption
+    name: "Enterprise AI adoption"
+    description: >
+      Case studies, McKinsey/Bain/Gartner reports, real ROI data, internal-tool
+      stories, change management lessons.
+    weight: 1.2
+
+  - id: ai_governance
+    name: "AI governance, risk, regulation"
+    description: >
+      EU AI Act, NIST AI RMF, ISO 42001, US/state regulation, audit and red-team
+      practices, board-level AI risk frameworks.
+    weight: 1.0
+
+  - id: data_platforms
+    name: "Data platforms & strategy"
+    description: >
+      Modern data stack, data product management, data quality, the data
+      foundation required to actually do AI in production.
+    weight: 1.0
+
+  - id: ai_safety
+    name: "AI safety & alignment research"
+    description: >
+      From major labs and academia — the actual research, not the discourse.
+      Mechanistic interpretability, evals, scalable oversight.
+    weight: 0.8
+
+  - id: adjacent_breakthroughs
+    name: "Adjacent tech breakthroughs"
+    description: >
+      Quantum computing, robotics, hardware, distributed systems, novel
+      database/runtime work — items with real cross-implications for AI/data.
+    weight: 0.7

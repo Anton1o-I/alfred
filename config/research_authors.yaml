@@ -1,0 +1,111 @@
+# Author / lab signal for the curator's triage pass.
+#
+# Used to mitigate arXiv noise: items are matched against these lists by
+# author name (exact, case-insensitive) and by lab/institution name
+# (substring match against the abstract). Matches are passed into the
+# triage prompt as a positive signal — NOT a hard filter. Items from
+# unknown affiliations can still surface if the model judges the content
+# exceptionally relevant.
+#
+# Coverage philosophy: this is not "the list of everyone who matters" —
+# it's "labs and people whose name on a paper raises the prior that the
+# work is substantive." Add or remove freely.
+
+top_labs:
+  # Foundation model labs
+  - "Anthropic"
+  - "OpenAI"
+  - "Google DeepMind"
+  - "Google Research"
+  - "DeepMind"
+  - "Google Brain"
+  - "Meta AI"
+  - "Meta Research"
+  - "FAIR"
+  - "Microsoft Research"
+  - "MSR"
+  - "Apple Machine Learning Research"
+  - "Apple ML"
+  - "Mistral"
+  - "Cohere"
+  - "AI21 Labs"
+  - "xAI"
+  - "Inflection AI"
+
+  # Research universities (top AI/ML)
+  - "MIT CSAIL"
+  - "MIT"
+  - "Stanford NLP"
+  - "Stanford HAI"
+  - "Stanford"
+  - "Berkeley AI Research"
+  - "BAIR"
+  - "UC Berkeley"
+  - "Carnegie Mellon"
+  - "CMU"
+  - "Princeton"
+  - "University of Washington"
+  - "UW NLP"
+  - "Oxford"
+  - "Cambridge"
+  - "ETH Zurich"
+  - "EPFL"
+  - "Tsinghua"
+  - "Peking University"
+
+  # Independent / non-profit research orgs
+  - "Allen Institute for AI"
+  - "AI2"
+  - "EleutherAI"
+  - "Hugging Face"
+  - "ARC AGI"
+  - "Redwood Research"
+  - "Apollo Research"
+  - "METR"
+  - "MILA"
+
+top_authors:
+  # Deep learning founders / Turing-award class
+  - "Geoffrey Hinton"
+  - "Yann LeCun"
+  - "Yoshua Bengio"
+  - "Juergen Schmidhuber"
+
+  # Foundation model / scaling research
+  - "Ilya Sutskever"
+  - "Dario Amodei"
+  - "Sam Altman"
+  - "Demis Hassabis"
+  - "Jared Kaplan"
+  - "Tom Brown"
+  - "Aidan Gomez"
+  - "Noam Shazeer"
+  - "Ashish Vaswani"
+  - "Jacob Devlin"
+
+  # Alignment / interpretability
+  - "Chris Olah"
+  - "Paul Christiano"
+  - "Jan Leike"
+  - "Stuart Russell"
+  - "Anca Dragan"
+  - "Jacob Steinhardt"
+
+  # Practitioners with strong signal
+  - "Andrej Karpathy"
+  - "Sebastian Raschka"
+  - "Jeremy Howard"
+  - "Chip Huyen"
+  - "Hamel Husain"
+  - "Eugene Yan"
+  - "Lilian Weng"
+  - "Simon Willison"
+  - "Andrew Ng"
+  - "Fei-Fei Li"
+
+  # RL / agents
+  - "Richard Sutton"
+  - "David Silver"
+  - "Sergey Levine"
+  - "Pieter Abbeel"
+  - "Chelsea Finn"

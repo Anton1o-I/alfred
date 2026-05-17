@@ -64,7 +64,7 @@ Accessible calendars:
     Access: owner
 
   Wife's Calendar
-    ID: wife@gmail.com
+    ID: <partner-email>@example.com
     Access: writer
 ```
 
@@ -74,10 +74,10 @@ Edit `config/calendar.yaml` with your actual names and calendar IDs:
 
 ```yaml
 family:
-  - name: "Andres"          # Your name
+  - name: "<Your name>"     # Your name
     calendar_id: "primary"
-  - name: "Maria"            # Your wife's name
-    calendar_id: "wife@gmail.com"  # From step 4
+  - name: "<Partner name>"            # Your wife's name
+    calendar_id: "<partner-email>@example.com"  # From step 4
 
 timezone: "America/Chicago"  # Your timezone
 ```

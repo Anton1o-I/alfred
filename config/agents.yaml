@@ -9,6 +9,16 @@ calendar:
   timeout_seconds: 60
   max_retries: 3
 
+curator:
+  description: "Personal research curator — weekly reading-list digest from RSS/arXiv"
+  enabled: true
+  allowed_tools:
+    - rss_fetch
+    - arxiv_fetch
+  model_preference: "auto"
+  timeout_seconds: 300
+  max_retries: 2
+
 meals:
   description: "Meal planning, recipe suggestions, and grocery list management"
   enabled: false

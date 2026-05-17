@@ -20,9 +20,28 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
-async def run_routine(app: App, task: ScheduledTaskConfig) -> None:
-    """Execute a single scheduled routine through the orchestrator."""
-    log.info("routine_start", task=task.name, agent=task.agent_name)
+async def run_routine(app: App, task: ScheduledTaskConfig, compare: bool = False) -> None:
+    """Execute a single scheduled routine through the orchestrator (or direct, for compare)."""
+    log.info("routine_start", task=task.name, agent=task.agent_name, compare=compare)
+
+    # Special path: curator A/B compare bypasses the orchestrator and calls the
+    # agent's generate_digest() directly, since the orchestrator only routes
+    # plain user messages.
+    if compare and task.agent_name == "curator":
+        from alfred.agents.curator import CuratorAgent
+
+        agent = app.agent_registry.get("curator")
+        if not isinstance(agent, CuratorAgent):
+            log.error("curator_not_registered_for_compare")
+            return
+        result = await agent.generate_digest(
+            model_name="local-default",
+            request_id="compare-run",
+            compare_with="cloud-default",
+        )
+        log.info("routine_finish", task=task.name, status="success", path=result.data.get("path"))
+        return
+
     request = AgentRequest(
         user_message=task.message,
         source=RequestSource.SCHEDULER,
@@ -90,11 +109,11 @@ async def run_scheduler(app: App) -> None:
         scheduler.shutdown(wait=False)
 
 
-async def run_routine_by_name(app: App, name: str) -> int:
+async def run_routine_by_name(app: App, name: str, compare: bool = False) -> int:
     """Fire a single named routine once. Returns 0 on success, 1 on error."""
     for task in app.settings.scheduled_tasks:
         if task.name == name:
-            await run_routine(app, task)
+            await run_routine(app, task, compare=compare)
             return 0
     log.error("routine_not_found", name=name)
     return 1

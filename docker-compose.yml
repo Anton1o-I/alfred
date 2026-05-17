@@ -13,7 +13,8 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      # /health requires auth; /health/liveliness is the unauthenticated probe.
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -30,6 +31,29 @@ services:
       - PHOENIX_WORKING_DIR=/data
     volumes:
       - phoenix_data:/data
+    restart: unless-stopped
+
+  # ── Local LLM inference (Ollama on RTX 4090) ──────────────
+  # Containerized so the lifecycle lives in compose alongside the rest of the
+  # stack. To pull models: `docker exec alfred-ollama ollama pull <model>`.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: alfred-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      # Match the host install pattern — unload model from VRAM after 5 min idle.
+      - OLLAMA_KEEP_ALIVE=5m
+    volumes:
+      - ollama_models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
   # ── Speech-to-text (faster-whisper on RTX 4090) ───────────
@@ -80,3 +104,4 @@ volumes:
   phoenix_data:
   n8n_data:
   whisper_models:
+  ollama_models:

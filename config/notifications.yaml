@@ -6,7 +6,7 @@ email_enabled: false
 sendgrid_api_key_env: "SENDGRID_API_KEY"
 
 recipients:
-  - user_id: "andres"
+  - user_id: "primary"
     preferred_channel: "imessage"
     phone: ""
     email: "a.iniguez21@gmail.com"

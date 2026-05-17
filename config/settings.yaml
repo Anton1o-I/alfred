@@ -49,6 +49,12 @@ scheduled_tasks:
     message: "Generate today's news digest for all active topics"
     enabled: false
 
+  - name: "weekly_research_curator"
+    cron: "0 18 * * 0"  # Sunday 6:00 PM
+    agent_name: "curator"
+    message: "Generate the weekly research curator digest"
+    enabled: true
+
   - name: "podcast_check"
     cron: "0 20 * * *"  # Daily 8:00 PM
     agent_name: "podcast"

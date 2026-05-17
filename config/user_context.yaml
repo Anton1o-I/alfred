@@ -1,0 +1,45 @@
+# User context for the research curator.
+#
+# The curator reads this profile on every run and uses it to:
+#   1. Score relevance during triage (which items to surface).
+#   2. Write the "why it matters to you" line on each summary.
+#
+# Be specific. Generic profiles produce generic "why it matters" output.
+# Edit freely; the agent picks up changes at the next run.
+
+identity:
+  # name is sourced from ALFRED_USER_ID env var; not committed
+  current_role: ""              # e.g. "Senior Data Scientist", "Director of Analytics"
+  trajectory: >
+    Targeting Chief Data & AI Officer (CDAO) or equivalent leadership roles.
+    Wants to operate at the intersection of technical depth and executive-level
+    decisions on AI strategy, governance, and value capture.
+
+technical_depth: >
+  Comfortable reading research papers and engineering details. Prefers concrete
+  technical content over executive-summary fluff. Currently hands-on building
+  a personal multi-agent system (this repo), so engineering content lands
+  immediately, not just abstractly.
+
+# Current focus — what you're actively working on or learning. The curator
+# weights items related to these higher.
+active_focus:
+  - "Building a local-first multi-agent personal assistant (Alfred)"
+  - "Pydantic AI, LangGraph, LiteLLM, agent design patterns"
+  - "Enterprise AI adoption patterns and ROI evidence"
+  - "AI governance frameworks and how they'll affect CDAO-level decisions"
+  - "Cost economics of self-hosting vs cloud LLM inference"
+
+# Topics or framings to deprioritize even if otherwise on-topic.
+avoid:
+  - "Hype without substance — '10 ways AI will change X' style listicles"
+  - "Vendor marketing thinly disguised as analysis"
+  - "Repetitive coverage of model release benchmarks"
+  - "AI doomerism / safety discourse without research backing"
+
+# NOTE: A `why_it_matters_style` field used to live here when the curator
+# wrote personalized "why it matters to you" lines. As of synthesis prompt
+# v1.2 the curator writes field/industry significance instead — no personal
+# framing — so per-user style guidance is no longer used. The synthesis
+# prompt itself drives tone and structure. This profile is now only used
+# during the TRIAGE pass for relevance scoring.

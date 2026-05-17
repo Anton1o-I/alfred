@@ -263,7 +263,7 @@ class NotifyTool(Tool):
                     "type": "string",
                     "description": (
                         "Who to notify: 'family' for all members, "
-                        "or a specific user_id like 'andres'"
+                        "or a specific user_id like 'primary'"
                     ),
                     "default": "family",
                 },
