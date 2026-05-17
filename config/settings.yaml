@@ -18,6 +18,7 @@ budget:
     news: 80000
     podcast: 80000
     tasks: 50000
+    curator: 200000
   # Dollar caps (USD). 0 = unlimited. Local Ollama calls cost $0,
   # so these effectively only constrain cloud (Claude) spend.
   global_daily_usd_limit: 5.0
@@ -29,6 +30,7 @@ budget:
     news: 1.0
     podcast: 1.0
     tasks: 0.5
+    curator: 2.0
 
 scheduled_tasks:
   - name: "weekly_calendar_digest"

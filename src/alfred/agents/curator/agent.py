@@ -264,7 +264,10 @@ class CuratorAgent(AgentBase):
         "Personal research curator. Pulls from configured RSS and arXiv sources, "
         "triages against user context, and produces a curated reading-list digest."
     )
-    model = "local-default"
+    # Synthesis runs through cloud-default (Sonnet). Triage stays local —
+    # see _build_triage_agent call below. Bake-off (2026-05-17) showed cloud
+    # synthesis produces materially better "Why it matters" framing.
+    model = "cloud-default"
 
     def __init__(
         self,
@@ -275,8 +278,8 @@ class CuratorAgent(AgentBase):
         self._config = config
 
     async def run(self, message: str, context: AgentContext) -> AgentResult:
-        """Default conversational invocation: produce a single-model digest with local-default."""
-        return await self.generate_digest(model_name="local-default", request_id=context.request_id)
+        """Default conversational invocation: produce a single-model digest via cloud synthesis."""
+        return await self.generate_digest(model_name="cloud-default", request_id=context.request_id)
 
     async def generate_digest(
         self,
