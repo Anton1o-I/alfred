@@ -607,4 +607,5 @@ async def _send(app: App, subject: str, plain: str, html: str) -> None:
         subject=subject,
         html_body=html_final,
         from_name=from_name,
+        agent_name="calendar",
     )

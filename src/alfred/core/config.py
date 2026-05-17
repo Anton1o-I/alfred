@@ -53,6 +53,10 @@ class RecipientConfig(BaseModel):
     phone: str | None = None
     email: str | None = None
     email_env: str | None = None  # If set, takes precedence over `email` (env-var indirection)
+    # Which agents this recipient receives emails from. Empty list → all agents
+    # (default). Set to e.g. ["calendar"] to only receive calendar-driven sends
+    # (daily briefing, weekly preview) and skip the research curator digest.
+    subscriptions: list[str] = []
 
 
 class NotificationConfig(BaseModel):

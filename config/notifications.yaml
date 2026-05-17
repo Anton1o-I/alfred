@@ -29,3 +29,12 @@ recipients:
     preferred_channel: "email"
     phone: ""
     email_env: "ALFRED_PRIMARY_RECIPIENT_EMAIL"
+    # subscriptions empty → receives all agent-driven emails (calendar + curator)
+
+  - user_id: "secondary"
+    preferred_channel: "email"
+    phone: ""
+    email_env: "ALFRED_SECONDARY_RECIPIENT_EMAIL"
+    # Calendar-only: gets daily briefing + weekly preview, NOT the research curator.
+    subscriptions:
+      - calendar

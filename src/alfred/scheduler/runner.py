@@ -51,6 +51,7 @@ async def _email_curator_digest(
         html_body=html_body_with_sig,
         request_id=request_id,
         from_name=from_name,
+        agent_name="curator",
     )
     for r in results:
         if not r.success:

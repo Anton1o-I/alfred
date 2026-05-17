@@ -82,11 +82,23 @@ class NotificationService:
         html_body: str | None = None,
         request_id: str = "",
         from_name: str | None = None,
+        agent_name: str | None = None,
     ) -> list[NotificationResult]:
-        """Send a notification to all family members via their preferred channel."""
+        """Send a notification to all family members via their preferred channel.
+
+        When `agent_name` is set, recipients whose `subscriptions` list is
+        non-empty and does NOT contain that agent are skipped. Empty
+        subscriptions = subscribed to everything (default).
+        """
         metadata = {"from_name": from_name} if from_name else {}
         results = []
         for recipient in self._config.recipients:
+            if (
+                agent_name
+                and recipient.subscriptions
+                and agent_name not in recipient.subscriptions
+            ):
+                continue
             notification = Notification(
                 recipient=recipient.phone or recipient.email or recipient.user_id,
                 subject=subject,
