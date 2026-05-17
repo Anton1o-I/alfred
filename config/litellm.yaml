@@ -1,18 +1,31 @@
 model_list:
   # ── Local models (Ollama on homelab) ──────────────────────
+  # Qwen 3 14B with thinking disabled. The `think: false` param disables
+  # Qwen 3's <think> blocks at the Ollama API level — those blocks break
+  # Pydantic AI's typed-output tool-call parsing. Disabling at the server
+  # gets non-thinking output uniformly, regardless of how Pydantic AI
+  # frames the call (tools, JSON mode, etc.).
   - model_name: local-default
     litellm_params:
-      model: ollama/qwen2.5:14b-instruct-q4_K_M
+      model: ollama/qwen3:14b
       api_base: os.environ/OLLAMA_BASE_URL
       timeout: 120
       max_tokens: 4096
+      temperature: 0.2
+      num_ctx: 8192
+      think: false
+      drop_params: false   # don't strip `think` — Ollama recognizes it even though OpenAI doesn't
 
   - model_name: local-fast
     litellm_params:
-      model: ollama/qwen2.5:14b-instruct-q4_K_M
+      model: ollama/qwen3:14b
       api_base: os.environ/OLLAMA_BASE_URL
       timeout: 60
       max_tokens: 2048
+      temperature: 0.2
+      num_ctx: 8192
+      think: false
+      drop_params: false
 
   # ── Cloud models (Anthropic) ──────────────────────────────
   - model_name: cloud-default

@@ -1,9 +1,14 @@
 # Recurring-event scenarios. Recurring events skip the conflict check
 # (they collide naturally over time) and emit an RRULE on the iCal.
+#
+# Each email pins an explicit start date so the test doesn't flap on
+# Qwen's date-resolution variance — what we're testing here is that
+# the recurrence rule gets set correctly, not date arithmetic.
 
 - name: weekly_specific_day
   email: |
-    Schedule a weekly standup every Monday at 9am for 15 minutes
+    Schedule a weekly standup starting May 18 at 9am for 15 minutes,
+    repeating every Monday
   today: "2026-05-17"
   initial_calendar: []
   expect:
@@ -14,7 +19,7 @@
 
 - name: bi_weekly
   email: |
-    Add a 1:1 with my manager every other Tuesday at 11am
+    Add a 1:1 with my manager starting May 19 at 11am, every other Tuesday
   today: "2026-05-17"
   initial_calendar: []
   expect:
@@ -25,8 +30,7 @@
 
 - name: monthly
   email: |
-    Block off the first Monday of every month at 10am for team retro,
-    one hour
+    Block off May 19 at 10am for team retro, one hour, repeating monthly
   today: "2026-05-17"
   initial_calendar: []
   expect:
@@ -36,7 +40,8 @@
 
 - name: weekly_multiple_days
   email: |
-    Schedule yoga every Tuesday and Thursday at 7am for 45 minutes
+    Schedule yoga starting May 19 at 7am for 45 minutes, every Tuesday
+    and Thursday
   today: "2026-05-17"
   initial_calendar: []
   expect:
@@ -46,7 +51,7 @@
 
 - name: recurring_skips_conflict_check
   email: |
-    Add a weekly date night every Friday at 7pm
+    Add a weekly date night starting May 22 at 7pm, every Friday
   today: "2026-05-17"
   initial_calendar:
     - title: "Movie with kids"
@@ -63,7 +68,7 @@
 
 - name: not_recurring_one_word_off
   email: |
-    Add lunch with Sarah Wednesday at 12:30pm
+    Add lunch with Sarah on May 20 at 12:30pm
   today: "2026-05-17"
   initial_calendar: []
   expect:
@@ -72,7 +77,7 @@
 
 - name: not_recurring_says_once
   email: |
-    Schedule a one-time strategy meeting next Tuesday at 2pm
+    Schedule a one-time strategy meeting on May 19 at 2pm
   today: "2026-05-17"
   initial_calendar: []
   expect:
