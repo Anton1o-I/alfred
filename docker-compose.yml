@@ -1,0 +1,82 @@
+services:
+  # ── Model Gateway ──────────────────────────────────────────
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: alfred-litellm
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config/litellm.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Observability ──────────────────────────────────────────
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: alfred-phoenix
+    ports:
+      - "6006:6006"   # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    environment:
+      - PHOENIX_WORKING_DIR=/data
+    volumes:
+      - phoenix_data:/data
+    restart: unless-stopped
+
+  # ── Speech-to-text (faster-whisper on RTX 4090) ───────────
+  # Exposes OpenAI-compatible /v1/audio/transcriptions endpoint.
+  # Models are downloaded on first use into a named volume.
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    container_name: alfred-whisper
+    ports:
+      - "8000:8000"
+    environment:
+      # Default model. Change to Systran/faster-whisper-large-v3-turbo for speed,
+      # Systran/faster-whisper-large-v3 for max accuracy.
+      - WHISPER__MODEL=Systran/faster-distil-whisper-large-v3
+      - WHISPER__INFERENCE_DEVICE=cuda
+      - WHISPER__COMPUTE_TYPE=float16
+      # Unload model from VRAM after 5 min idle (mirrors OLLAMA_KEEP_ALIVE).
+      # Container stays up; model reloads on next request (~5-10s).
+      - WHISPER__TTL=300
+    volumes:
+      - whisper_models:/home/ubuntu/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ── Workflow Triggers ──────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: alfred-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_SECURE_COOKIE=false
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678/}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: unless-stopped
+
+volumes:
+  phoenix_data:
+  n8n_data:
+  whisper_models:

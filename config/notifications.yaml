@@ -1,0 +1,12 @@
+imessage_enabled: true
+bluebubbles_url_env: "BLUEBUBBLES_URL"
+bluebubbles_password_env: "BLUEBUBBLES_PASSWORD"
+
+email_enabled: false
+sendgrid_api_key_env: "SENDGRID_API_KEY"
+
+recipients:
+  - user_id: "andres"
+    preferred_channel: "imessage"
+    phone: ""
+    email: "a.iniguez21@gmail.com"

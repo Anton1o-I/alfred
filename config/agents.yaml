@@ -1,0 +1,71 @@
+calendar:
+  description: "Family calendar management, scheduling, and conflict detection"
+  enabled: true
+  allowed_tools:
+    - google_calendar_read
+    - google_calendar_write
+    - notify
+  model_preference: "auto"
+  timeout_seconds: 60
+  max_retries: 3
+
+meals:
+  description: "Meal planning, recipe suggestions, and grocery list management"
+  enabled: false
+  allowed_tools:
+    - recipe_search
+    - grocery_list_read
+    - grocery_list_write
+    - notify
+  model_preference: "auto"
+  timeout_seconds: 60
+  max_retries: 3
+
+research:
+  description: "On-demand research, product comparison, local area lookup, and question answering"
+  enabled: false
+  allowed_tools:
+    - web_search
+    - web_scrape
+    - topic_store_read
+    - notify
+  model_preference: "cloud"
+  timeout_seconds: 90
+  max_retries: 3
+
+news:
+  description: "News monitoring, synthesis, and digest generation for tracked topics"
+  enabled: false
+  allowed_tools:
+    - rss_fetch
+    - news_api_search
+    - web_scrape
+    - topic_store_read
+    - notify
+  model_preference: "auto"
+  timeout_seconds: 90
+  max_retries: 3
+
+podcast:
+  description: "Podcast feed monitoring, transcription, and episode summarization"
+  enabled: false
+  allowed_tools:
+    - podcast_feed_fetch
+    - audio_download
+    - whisper_transcribe
+    - topic_store_read
+    - notify
+  model_preference: "auto"
+  timeout_seconds: 300
+  max_retries: 2
+
+tasks:
+  description: "Household task tracking, chore scheduling, and maintenance reminders"
+  enabled: false
+  allowed_tools:
+    - task_list_read
+    - task_list_write
+    - notify
+  model_preference: "local"
+  timeout_seconds: 60
+  max_retries: 3

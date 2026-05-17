@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+secrets/
+*.key
+*.pem
+
+# Google OAuth credentials (sensitive)
+config/google_credentials.json
+config/google_token.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data and logs
+*.db
+*.sqlite3
+logs/
+*.log
+
+# Coverage and testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Local Claude-session guidance — never committed
+CLAUDE.md

@@ -1,0 +1,57 @@
+model_list:
+  # ── Local models (Ollama on homelab) ──────────────────────
+  - model_name: local-default
+    litellm_params:
+      model: ollama/phi4:14b-q4_K_M
+      api_base: ${OLLAMA_BASE_URL:=http://homelab.local:11434}
+      timeout: 120
+      max_tokens: 4096
+
+  - model_name: local-fast
+    litellm_params:
+      model: ollama/phi4:14b-q4_K_M
+      api_base: ${OLLAMA_BASE_URL:=http://homelab.local:11434}
+      timeout: 60
+      max_tokens: 2048
+
+  # ── Cloud models (Anthropic) ──────────────────────────────
+  - model_name: cloud-default
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 120
+      max_tokens: 8192
+
+  - model_name: cloud-strong
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 180
+      max_tokens: 8192
+
+# ── Router settings ──────────────────────────────────────────
+router_settings:
+  routing_strategy: "simple-shuffle"  # or "least-busy", "latency-based-routing"
+  num_retries: 2
+  timeout: 120
+  retry_after: 5
+  allowed_fails: 2
+
+  # Fallback chain: try local first, fall back to cloud
+  fallbacks:
+    - local-default: ["cloud-default"]
+    - local-fast: ["cloud-default"]
+
+# ── General settings ─────────────────────────────────────────
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true   # silently drop unsupported params per provider
+  set_verbose: false
+  success_callback: ["otel"]
+  failure_callback: ["otel"]
+
+environment_variables:
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://phoenix:4317"
+  OTEL_SERVICE_NAME: "alfred-litellm"

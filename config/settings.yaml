@@ -1,0 +1,56 @@
+database_path: "data/alfred.db"
+log_level: "INFO"
+
+# LiteLLM Proxy handles all model routing, fallback, and cost tracking.
+# Model definitions live in config/litellm.yaml, not here.
+litellm:
+  base_url: "http://localhost:4000"
+  api_key_env: "LITELLM_MASTER_KEY"
+
+budget:
+  per_request_max_tokens: 8192
+  global_daily_limit: 500000
+  global_monthly_limit: 10000000
+  daily_agent_limits:
+    calendar: 50000
+    meals: 50000
+    research: 100000
+    news: 80000
+    podcast: 80000
+    tasks: 50000
+  # Dollar caps (USD). 0 = unlimited. Local Ollama calls cost $0,
+  # so these effectively only constrain cloud (Claude) spend.
+  global_daily_usd_limit: 5.0
+  global_monthly_usd_limit: 100.0
+  daily_agent_usd_limits:
+    calendar: 1.0
+    meals: 1.0
+    research: 2.0
+    news: 1.0
+    podcast: 1.0
+    tasks: 0.5
+
+scheduled_tasks:
+  - name: "weekly_calendar_digest"
+    cron: "0 18 * * 0"  # Sunday 6:00 PM
+    agent_name: "calendar"
+    message: "Generate the weekly calendar digest for this upcoming week"
+    enabled: false
+
+  - name: "daily_morning_briefing"
+    cron: "0 7 * * *"  # Daily 7:00 AM
+    agent_name: "calendar"
+    message: "Generate today's schedule briefing"
+    enabled: false
+
+  - name: "daily_news_digest"
+    cron: "0 7 * * *"  # Daily 7:00 AM
+    agent_name: "news"
+    message: "Generate today's news digest for all active topics"
+    enabled: false
+
+  - name: "podcast_check"
+    cron: "0 20 * * *"  # Daily 8:00 PM
+    agent_name: "podcast"
+    message: "Check for new podcast episodes and summarize any that match active topics"
+    enabled: false
