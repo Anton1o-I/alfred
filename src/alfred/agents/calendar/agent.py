@@ -110,6 +110,8 @@ class CalendarAgent(AgentBase):
             final_state = await self._graph.ainvoke(initial_state)
             outcome = final_state.get("outcome", "unknown")
             span.set_attribute("alfred.outcome", outcome)
+            complexity = final_state.get("complexity", "simple")
+            span.set_attribute("alfred.complexity", complexity)
 
         reply_plain = final_state.get("reply_plain", "")
         reply_html = final_state.get("reply_html")

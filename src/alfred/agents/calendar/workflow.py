@@ -128,6 +128,23 @@ class IntentClassification(BaseModel):
     action: Literal["create", "delete", "query", "clarify"] = Field(
         description="What the user wants to do with the calendar."
     )
+    complexity: Literal["simple", "complex"] = Field(
+        default="simple",
+        description=(
+            "How hard the request is to reason about. "
+            "simple: one event with clear, explicit date+time and a "
+            "straightforward title (e.g. 'Schedule lunch with Sarah on May 20 at 12:30pm'). "
+            "complex: needs careful reasoning. Set this to 'complex' if ANY of "
+            "the following apply: "
+            "(1) negation phrasing ('Monday, not tomorrow, the next one'); "
+            "(2) multiple events or actions in one email; "
+            "(3) relative-to-relative dates ('the Wednesday after next', "
+            "'the Tuesday after my doctor appointment'); "
+            "(4) ambiguous identification of an existing event for delete/update; "
+            "(5) the user explicitly says it's complicated or asks you to think carefully. "
+            "When in doubt, prefer simple — escalation has a cost."
+        ),
+    )
     reasoning: str = Field(default="", description="One short sentence.")
 
 
@@ -231,6 +248,7 @@ class CalendarState(TypedDict, total=False):
 
     # Classification
     action: str
+    complexity: str  # "simple" → local-default; "complex" → cloud-default
 
     # Parsed event (for create branch)
     parsed_event: dict
@@ -428,10 +446,23 @@ def build_calendar_graph(
     zero-arg callable returning a timezone-aware datetime when running
     simulations against fixed dates. Defaults to `datetime.now(tz)`.
     """
+    # Intent classification ALWAYS runs locally — it's a small classification
+    # task and routing decisions shouldn't themselves cost cloud tokens.
     intent_agent = _make_specialist(litellm_client, model_name, IntentClassification)
-    parse_agent = _make_specialist(litellm_client, model_name, EventDraft)
-    delete_parse_agent = _make_specialist(litellm_client, model_name, DeleteTarget)
-    delete_match_agent = _make_specialist(litellm_client, model_name, DeleteMatchDecision)
+    # Build local + cloud variants of each downstream specialist. The graph
+    # picks per-call based on the complexity tag the intent classifier set.
+    parse_agent_local = _make_specialist(litellm_client, model_name, EventDraft)
+    parse_agent_cloud = _make_specialist(litellm_client, "cloud-default", EventDraft)
+    delete_parse_local = _make_specialist(litellm_client, model_name, DeleteTarget)
+    delete_parse_cloud = _make_specialist(litellm_client, "cloud-default", DeleteTarget)
+    delete_match_local = _make_specialist(litellm_client, model_name, DeleteMatchDecision)
+    delete_match_cloud = _make_specialist(litellm_client, "cloud-default", DeleteMatchDecision)
+
+    def _pick_model_label(state: CalendarState) -> tuple[str, str]:
+        """Return (specialist_pool_label, model_name_for_logging)."""
+        if state.get("complexity") == "complex":
+            return ("cloud", "cloud-default")
+        return ("local", model_name)
 
     # ── Nodes ────────────────────────────────────────────────────────────
 
@@ -461,10 +492,12 @@ def build_calendar_graph(
         log.info(
             "calendar_intent_classified",
             action=result.output.action,
+            complexity=result.output.complexity,
             reasoning=result.output.reasoning[:120],
         )
         return {
             "action": result.output.action,
+            "complexity": result.output.complexity,
             "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
             "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
         }
@@ -477,8 +510,10 @@ def build_calendar_graph(
             upcoming_table=_format_upcoming_table(state["upcoming_days"]),
             email_body=state["email_body"],
         )
+        pool, model_label = _pick_model_label(state)
+        agent = parse_agent_cloud if pool == "cloud" else parse_agent_local
         try:
-            result = await parse_agent.run(prompt)
+            result = await agent.run(prompt)
             usage = result.usage()
             ev = result.output
             log.info(
@@ -486,6 +521,7 @@ def build_calendar_graph(
                 title=ev.title,
                 start_iso=ev.start_iso,
                 end_iso=ev.end_iso,
+                model=model_label,
             )
             return {
                 "parsed_event": ev.model_dump(),
@@ -612,14 +648,17 @@ def build_calendar_graph(
             upcoming_table=_format_upcoming_table(state["upcoming_days"]),
             email_body=state["email_body"],
         )
+        pool, model_label = _pick_model_label(state)
+        agent = delete_parse_cloud if pool == "cloud" else delete_parse_local
         try:
-            result = await delete_parse_agent.run(prompt)
+            result = await agent.run(prompt)
             usage = result.usage()
             target = result.output
             log.info(
                 "calendar_delete_target_parsed",
                 intent_summary=target.intent_summary,
                 date_hint_iso=target.date_hint_iso,
+                model=model_label,
             )
             return {
                 "delete_target": target.model_dump(),
@@ -739,8 +778,10 @@ def build_calendar_graph(
             email_body=state["email_body"],
             candidates_block="\n".join(lines),
         )
+        pool, model_label = _pick_model_label(state)
+        match_agent = delete_match_cloud if pool == "cloud" else delete_match_local
         try:
-            result = await delete_match_agent.run(prompt)
+            result = await match_agent.run(prompt)
             usage = result.usage()
             decision = result.output
             confidence = decision.confidence
@@ -765,6 +806,7 @@ def build_calendar_graph(
                 confidence=confidence,
                 event_id=(decision.event_id or "")[:40],
                 reasoning=reasoning[:120],
+                model=model_label,
             )
             return {
                 "match_decision": {
