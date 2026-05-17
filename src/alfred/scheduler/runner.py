@@ -30,13 +30,27 @@ async def _email_curator_digest(
     from datetime import UTC, datetime
     from pathlib import Path
 
+    from alfred.notifications.signature import (
+        append_to_body,
+        append_to_html,
+        render_signature,
+    )
+
     body = Path(digest_path).read_text()
     subject = f"Alfred Research Digest — {datetime.now(UTC).strftime('%Y-%m-%d')}"
+    cfg = app.settings.notifications
+    from_name = cfg.email_from_names_by_agent.get("curator")
+    tagline = cfg.email_taglines_by_agent.get("curator", "")
+    sig_plain, sig_html = render_signature(from_name or "", tagline)
+    body = append_to_body(body, sig_plain)
+    html_body_with_sig = append_to_html(html_body, sig_html) if html_body else None
+
     results = await app.notification_service.send_to_family(
         body=body,
         subject=subject,
-        html_body=html_body,
+        html_body=html_body_with_sig,
         request_id=request_id,
+        from_name=from_name,
     )
     for r in results:
         if not r.success:
@@ -53,6 +67,15 @@ async def run_routine(
 ) -> None:
     """Execute a single scheduled routine through the orchestrator (or direct, for compare)."""
     log.info("routine_start", task=task.name, agent=task.agent_name, compare=compare)
+
+    # Inbox poller: fetch unread messages, dispatch to orchestrator, reply.
+    if task.agent_name == "inbox":
+        if app.inbox_poller is None:
+            log.warning("inbox_poller_not_configured", task=task.name)
+            return
+        counts = await app.inbox_poller.process_once(app)
+        log.info("routine_finish", task=task.name, status="success", **counts)
+        return
 
     # Curator goes direct (not through orchestrator) so we can email the
     # actual digest body with a proper subject. Non-compare runs also email;
@@ -105,8 +128,15 @@ def build_scheduler(app: App) -> AsyncIOScheduler:
         log.warning("scheduler_no_enabled_tasks")
         return scheduler
 
+    # Pseudo-agents that route through dedicated paths in run_routine
+    # rather than the agent registry.
+    pseudo_agents = {"inbox"}
+
     for task in enabled:
-        if app.agent_registry.get(task.agent_name) is None:
+        if (
+            task.agent_name not in pseudo_agents
+            and app.agent_registry.get(task.agent_name) is None
+        ):
             log.warning(
                 "scheduler_skip_task",
                 task=task.name,

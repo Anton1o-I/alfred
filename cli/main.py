@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 import click
 import structlog
+from dotenv import load_dotenv
+
+# Load .env before anything else reads os.environ. Quoted values (e.g. for
+# passwords containing '#') are stripped of their quotes automatically.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 log = structlog.get_logger()
 
@@ -126,18 +132,17 @@ def google_auth(no_browser: bool) -> None:
     """Run the Google OAuth consent flow. Grants Gmail + Calendar scopes in one consent."""
     from pathlib import Path
 
-    from alfred.integrations.google_auth import GMAIL_SEND_SCOPE, run_consent_flow
+    from alfred.integrations.google_auth import DEFAULT_SCOPES, run_consent_flow
 
-    scopes = [GMAIL_SEND_SCOPE, "https://www.googleapis.com/auth/calendar"]
     config_dir = Path(__file__).resolve().parent.parent / "config"
 
-    click.echo("Starting Google OAuth flow (Gmail send + Calendar)...")
+    click.echo("Starting Google OAuth flow (Gmail send + modify + Calendar)...")
     click.echo("Sign in as Alfred's gmail account when the browser opens.\n")
     try:
         creds = run_consent_flow(
             credentials_path=config_dir / "google_credentials.json",
             token_path=config_dir / "google_token.json",
-            scopes=scopes,
+            scopes=DEFAULT_SCOPES,
             open_browser=not no_browser,
         )
         click.echo("\nAuthentication successful.")
@@ -151,22 +156,32 @@ def google_auth(no_browser: bool) -> None:
 
 @main.command()
 def list_calendars() -> None:
-    """List all Google Calendars accessible to the authenticated account."""
-    from alfred.agents.calendar.google_client import GoogleCalendarClient
+    """List accessible calendars on the configured provider (iCloud or Google)."""
+    from alfred.core.config import load_settings
 
+    settings = load_settings()
+    config_dir = Path(__file__).resolve().parent.parent / "config"
+    # Reuse the same provider-selection logic the app uses.
+    from alfred.agents.calendar.agent import CalendarConfig
+    from alfred.app import _build_calendar_client
+
+    cal_cfg = CalendarConfig(config_dir)
+    client = _build_calendar_client(cal_cfg, settings)
+    if client is None:
+        click.echo(f"Calendar client unavailable for provider '{cal_cfg.provider}'.")
+        click.echo("Check .env values and config/calendar.yaml.")
+        return
     try:
-        client = GoogleCalendarClient()
         calendars = client.list_calendars()
-        click.echo("Accessible calendars:\n")
+        click.echo(f"Accessible calendars (provider: {cal_cfg.provider}):\n")
         for cal in calendars:
-            primary = " (PRIMARY)" if cal["primary"] else ""
+            primary = " (PRIMARY)" if cal.get("primary") else ""
             click.echo(f"  {cal['summary']}{primary}")
             click.echo(f"    ID: {cal['id']}")
-            click.echo(f"    Access: {cal['access_role']}")
+            click.echo(f"    Access: {cal.get('access_role', '?')}")
             click.echo()
-    except RuntimeError as e:
+    except Exception as e:
         click.echo(f"Error: {e}")
-        click.echo("Run 'alfred google-auth' first.")
 
 
 # ── Implementation ───────────────────────────────────────────

@@ -7,6 +7,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from pathlib import Path
+from typing import Any
 
 import structlog
 from googleapiclient.discovery import build
@@ -98,6 +99,58 @@ class EmailClient:
             return NotificationResult(success=False, channel="email", error=str(e))
         except Exception as e:
             log.error("email_send_failed", error=str(e), recipient=notification.recipient)
+            return NotificationResult(success=False, channel="email", error=str(e))
+
+    async def send_reply(
+        self,
+        recipient: str,
+        subject: str,
+        body: str,
+        thread_id: str = "",
+        in_reply_to: str = "",
+        references: str = "",
+        html_body: str | None = None,
+    ) -> NotificationResult:
+        """Send a reply that threads with the original message in Gmail."""
+        try:
+            service = self._get_service()
+            if html_body:
+                msg: MIMEText | MIMEMultipart = MIMEMultipart("alternative")
+                msg.attach(MIMEText(body, "plain", "utf-8"))
+                msg.attach(MIMEText(html_body, "html", "utf-8"))
+            else:
+                msg = MIMEText(body, "plain", "utf-8")
+            msg["from"] = self._get_from_header()
+            msg["to"] = recipient
+            msg["subject"] = subject
+            if in_reply_to:
+                msg["In-Reply-To"] = in_reply_to
+                # Gmail wants References to be a chain; appending the parent is sufficient.
+                msg["References"] = (references + " " + in_reply_to).strip()
+
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+            payload: dict[str, Any] = {"raw": raw}
+            if thread_id:
+                payload["threadId"] = thread_id
+            sent = (
+                service.users()
+                .messages()
+                .send(userId="me", body=payload)
+                .execute()
+            )
+            log.info(
+                "email_reply_sent",
+                recipient=recipient,
+                subject=subject,
+                message_id=sent.get("id"),
+                thread_id=thread_id,
+            )
+            return NotificationResult(success=True, channel="email")
+        except HttpError as e:
+            log.error("email_reply_http_error", error=str(e), recipient=recipient)
+            return NotificationResult(success=False, channel="email", error=str(e))
+        except Exception as e:
+            log.error("email_reply_failed", error=str(e), recipient=recipient)
             return NotificationResult(success=False, channel="email", error=str(e))
 
     async def health_check(self) -> bool:

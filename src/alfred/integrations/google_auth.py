@@ -18,7 +18,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 log = structlog.get_logger()
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
-DEFAULT_SCOPES: list[str] = [GMAIL_SEND_SCOPE]
+GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
+DEFAULT_SCOPES: list[str] = [GMAIL_SEND_SCOPE, GMAIL_MODIFY_SCOPE, CALENDAR_SCOPE]
 
 
 def run_consent_flow(

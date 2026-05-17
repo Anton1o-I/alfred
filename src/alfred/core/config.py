@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,7 @@ class RecipientConfig(BaseModel):
     preferred_channel: NotificationChannel = NotificationChannel.IMESSAGE
     phone: str | None = None
     email: str | None = None
+    email_env: str | None = None  # If set, takes precedence over `email` (env-var indirection)
 
 
 class NotificationConfig(BaseModel):
@@ -59,10 +61,32 @@ class NotificationConfig(BaseModel):
     imessage_enabled: bool = True
     bluebubbles_url_env: str = "BLUEBUBBLES_URL"
     bluebubbles_password_env: str = "BLUEBUBBLES_PASSWORD"
+
     email_enabled: bool = False
-    sendgrid_api_key_env: str = "SENDGRID_API_KEY"
-    email_from_name: str = "Alfred"  # Display name in the From header
-    email_from_address: str = ""  # Must match the OAuth-authorized Gmail account
+    # "gmail" (OAuth, 7-day Testing limit) or "icloud" (SMTP, app password).
+    email_provider: str = "icloud"
+    email_from_name: str = "Alfred"  # Default display name in the From header
+    # Per-agent From-name overrides — keyed by agent name. Empty falls back to default.
+    email_from_names_by_agent: dict[str, str] = {}
+    # Per-agent signature taglines (one short line below the persona name).
+    # Empty string for an agent → no signature appended.
+    email_taglines_by_agent: dict[str, str] = {}
+
+    # Gmail-specific (when email_provider == "gmail")
+    sendgrid_api_key_env: str = "SENDGRID_API_KEY"  # legacy, unused
+    email_from_address: str = ""  # Must match the OAuth-authorized account
+
+    # iCloud-specific (when email_provider == "icloud"). Values come from env
+    # vars so the alias address never lands in a tracked file.
+    #
+    # iCloud's three protocols disagree on which identifier they accept:
+    #   SMTP / IMAP → the @icloud.com alias address (ALFRED_ICLOUD_EMAIL)
+    #   CalDAV      → the primary Apple ID email (ALFRED_ICLOUD_USERNAME)
+    # We split them so each protocol uses what works.
+    icloud_email_env: str = "ALFRED_ICLOUD_EMAIL"
+    icloud_username_env: str = "ALFRED_ICLOUD_USERNAME"  # CalDAV only
+    icloud_app_password_env: str = "ALFRED_ICLOUD_APP_PASSWORD"
+
     recipients: list[RecipientConfig] = []
 
 
@@ -77,6 +101,13 @@ class ScheduledTaskConfig(BaseModel):
     notification_channel: NotificationChannel | None = None
 
 
+class InboxConfig(BaseModel):
+    """Inbound-email gating: who Alfred will accept commands from over email."""
+
+    authorized_senders: list[str] = []  # Lower-cased on load; exact-match required
+    enabled: bool = False  # Set true once OAuth has gmail.modify scope
+
+
 class Settings(BaseModel):
     """Root configuration object."""
 
@@ -84,6 +115,7 @@ class Settings(BaseModel):
     litellm: LiteLLMConfig = LiteLLMConfig()
     budget: BudgetConfig = BudgetConfig()
     notifications: NotificationConfig = NotificationConfig()
+    inbox: InboxConfig = InboxConfig()
     scheduled_tasks: list[ScheduledTaskConfig] = []
     database_path: str = "data/alfred.db"
     log_level: str = "INFO"
@@ -115,11 +147,32 @@ def load_settings(config_dir: Path = Path("config")) -> Settings:
         ScheduledTaskConfig(**t) for t in settings_data.pop("scheduled_tasks", [])
     ]
 
+    inbox_data = settings_data.pop("inbox", {})
+    if "authorized_senders" in inbox_data:
+        # Authorized senders can also be env-var refs (e.g. "${ALFRED_ALLOWED_SENDER_1}")
+        # to keep personal addresses out of tracked files.
+        resolved: list[str] = []
+        for s in inbox_data["authorized_senders"]:
+            if isinstance(s, str) and s.startswith("${") and s.endswith("}"):
+                val = os.environ.get(s[2:-1], "").strip().lower()
+                if val:
+                    resolved.append(val)
+            elif s:
+                resolved.append(s.lower())
+        inbox_data["authorized_senders"] = resolved
+
+    # Resolve email_env -> email indirection on each recipient
+    for r in notifications_data.get("recipients", []):
+        env_key = r.get("email_env")
+        if env_key and not r.get("email"):
+            r["email"] = os.environ.get(env_key, "").strip() or None
+
     return Settings(
         agents=agents,
         litellm=LiteLLMConfig(**settings_data.pop("litellm", {})),
         budget=BudgetConfig(**settings_data.pop("budget", {})),
         notifications=NotificationConfig(**notifications_data),
+        inbox=InboxConfig(**inbox_data),
         scheduled_tasks=scheduled_tasks,
         **settings_data,
     )

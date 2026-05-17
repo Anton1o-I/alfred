@@ -47,7 +47,9 @@ class BudgetPolicy:
             global_daily_limit=self._config.global_daily_limit,
         )
 
-        # Token caps
+        # Token caps (0 = unlimited). Tokens are tracked for visibility but
+        # dollar caps are the real safety net for cloud spend; local Ollama
+        # has $0 cost, so token quotas there are just artificial friction.
         if agent_limit > 0 and agent_today + estimated_tokens > agent_limit:
             return BudgetDecision(
                 allowed=False,
@@ -55,14 +57,20 @@ class BudgetPolicy:
                 f"({agent_today:,}/{agent_limit:,})",
                 **decision_base,
             )
-        if global_today + estimated_tokens > self._config.global_daily_limit:
+        if (
+            self._config.global_daily_limit > 0
+            and global_today + estimated_tokens > self._config.global_daily_limit
+        ):
             return BudgetDecision(
                 allowed=False,
                 reason=f"Global daily token limit reached "
                 f"({global_today:,}/{self._config.global_daily_limit:,})",
                 **decision_base,
             )
-        if global_month + estimated_tokens > self._config.global_monthly_limit:
+        if (
+            self._config.global_monthly_limit > 0
+            and global_month + estimated_tokens > self._config.global_monthly_limit
+        ):
             return BudgetDecision(
                 allowed=False,
                 reason=f"Global monthly token limit reached "

@@ -60,6 +60,7 @@ class AgentResponse(BaseModel):
     token_usage: list[TokenUsage] = []
     duration_ms: int = 0
     metadata: dict[str, Any] = {}
+    data: dict[str, Any] = {}  # Agent-specific structured output (e.g., the event for calendar)
 
 
 class LLMResponse(BaseModel):

@@ -27,3 +27,4 @@ class NotificationResult(BaseModel):
     success: bool
     channel: str
     error: str | None = None
+    message_id: str | None = None  # RFC 822 Message-Id of the sent message (email)

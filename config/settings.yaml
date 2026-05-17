@@ -8,19 +8,16 @@ litellm:
   api_key_env: "LITELLM_MASTER_KEY"
 
 budget:
+  # Token caps are tracked for visibility (`alfred budget`) but NOT enforced
+  # by default — local Ollama is free, so token quotas there are just friction.
+  # Set any of these to a positive integer to re-enable enforcement.
   per_request_max_tokens: 8192
-  global_daily_limit: 500000
-  global_monthly_limit: 10000000
-  daily_agent_limits:
-    calendar: 50000
-    meals: 50000
-    research: 100000
-    news: 80000
-    podcast: 80000
-    tasks: 50000
-    curator: 200000
-  # Dollar caps (USD). 0 = unlimited. Local Ollama calls cost $0,
-  # so these effectively only constrain cloud (Claude) spend.
+  global_daily_limit: 0
+  global_monthly_limit: 0
+  daily_agent_limits: {}
+
+  # Dollar caps (USD) — the real safety net. 0 = unlimited. Local Ollama
+  # calls cost $0, so these effectively only constrain cloud (Claude) spend.
   global_daily_usd_limit: 5.0
   global_monthly_usd_limit: 100.0
   daily_agent_usd_limits:
@@ -32,7 +29,22 @@ budget:
     tasks: 0.5
     curator: 2.0
 
+inbox:
+  enabled: true
+  # Allowlist comes from env vars to keep personal addresses out of tracked files.
+  # Set ALFRED_ALLOWED_SENDER_1 and ALFRED_ALLOWED_SENDER_2 in .env.
+  authorized_senders:
+    - "${ALFRED_ALLOWED_SENDER_1}"
+    - "${ALFRED_ALLOWED_SENDER_2}"
+
 scheduled_tasks:
+  - name: "inbox_poll"
+    cron: "*/5 * * * *"  # Every 5 minutes
+    agent_name: "inbox"
+    message: "Poll inbox for inbound emails"
+    enabled: true
+
+
   - name: "weekly_calendar_digest"
     cron: "0 18 * * 0"  # Sunday 6:00 PM
     agent_name: "calendar"

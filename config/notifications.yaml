@@ -3,12 +3,29 @@ bluebubbles_url_env: "BLUEBUBBLES_URL"
 bluebubbles_password_env: "BLUEBUBBLES_PASSWORD"
 
 email_enabled: true
-sendgrid_api_key_env: "SENDGRID_API_KEY"  # legacy field, unused — Gmail API path replaces it
-email_from_name: "Alfred · Research"  # Display name shown in recipient's inbox
-email_from_address: "alfred.iniguez.ai@gmail.com"
+email_provider: "icloud"  # "icloud" (SMTP + app password) or "gmail" (OAuth)
+email_from_name: "Alfred"  # default — used when no per-agent override matches
+email_from_names_by_agent:
+  curator: "Alfred · Research"
+  calendar: "Alfred · Scheduler"
+
+# Short tagline appended below the persona name as a signature.
+# Empty → no signature for that agent.
+email_taglines_by_agent:
+  curator: "AI research curator · reply to add topics or adjust focus"
+  calendar: "AI assistant · reply to confirm, correct, or ask for changes"
+
+# iCloud path: identity comes from env vars (see .env.example).
+icloud_email_env: "ALFRED_ICLOUD_EMAIL"
+icloud_username_env: "ALFRED_ICLOUD_USERNAME"  # primary Apple ID email — used ONLY for CalDAV
+icloud_app_password_env: "ALFRED_ICLOUD_APP_PASSWORD"
+
+# Gmail fallback (when email_provider == "gmail")
+sendgrid_api_key_env: "SENDGRID_API_KEY"  # legacy, unused
+email_from_address: ""
 
 recipients:
   - user_id: "primary"
     preferred_channel: "email"
     phone: ""
-    email: "a.iniguez21@gmail.com"
+    email_env: "ALFRED_PRIMARY_RECIPIENT_EMAIL"

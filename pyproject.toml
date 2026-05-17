@@ -31,6 +31,12 @@ dependencies = [
     "apscheduler>=3.10",
     # Research curator (RSS + arXiv ingestion)
     "feedparser>=6.0",
+    # iCloud (SMTP / IMAP / CalDAV) — app-password auth, no OAuth
+    "aiosmtplib>=3.0",
+    "caldav>=1.3",
+    "imap-tools>=1.7",
+    # .env loading for CLI invocations
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

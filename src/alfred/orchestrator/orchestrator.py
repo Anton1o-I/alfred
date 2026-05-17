@@ -78,4 +78,5 @@ class Orchestrator:
                 "budget_reason": result.get("budget_reason", ""),
                 "notification_sent": result.get("notification_sent", False),
             },
+            data=result.get("agent_data", {}) or {},
         )

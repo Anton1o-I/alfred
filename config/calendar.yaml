@@ -1,20 +1,18 @@
-# Google Calendar configuration
+# Calendar configuration
 #
-# Setup steps:
-#   1. Run: alfred google-auth
-#   2. Share your wife's calendar with your Google account (read+write)
-#   3. Run: alfred list-calendars
-#   4. Copy the calendar IDs below
+# "icloud" uses CalDAV + app-specific password (no OAuth, no expiration).
+# "google" uses the Gmail OAuth token (subject to 7-day Testing-mode timer).
+provider: "icloud"
 
-# Family members and their calendar IDs.
-# "primary" = the authenticated account's main calendar.
-# For shared calendars, use the full email address.
-family:
-  - name: ""         # Your name
-    calendar_id: "primary"
-  # - name: ""       # Wife's name
-  #   calendar_id: "" # Her Google Calendar email
+# iCloud-only: which named calendar within the Apple ID to write to.
+# Empty → principal default calendar. Use `alfred list-calendars` to inspect.
+icloud_calendar_name: "Alfred"
 
-# Default timezone for new events (IANA timezone)
-# See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+# Default timezone for new events (IANA).
 timezone: "America/Chicago"
+
+# Google-only: legacy field, ignored when provider == "icloud".
+calendar_id: "primary"
+
+# Family members. Currently informational only — single-calendar setup.
+family: []

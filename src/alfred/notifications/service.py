@@ -26,6 +26,7 @@ class NotificationService:
         db: Database,
     ) -> None:
         self._channels = channels
+        self.channels = channels  # Public read-only view for callers that need a specific channel
         self._config = config
         self._audit = audit_logger
         self._db = db
@@ -80,8 +81,10 @@ class NotificationService:
         subject: str | None = None,
         html_body: str | None = None,
         request_id: str = "",
+        from_name: str | None = None,
     ) -> list[NotificationResult]:
         """Send a notification to all family members via their preferred channel."""
+        metadata = {"from_name": from_name} if from_name else {}
         results = []
         for recipient in self._config.recipients:
             notification = Notification(
@@ -90,6 +93,7 @@ class NotificationService:
                 body=body,
                 html_body=html_body,
                 channel=recipient.preferred_channel,
+                metadata=metadata,
             )
             result = await self.send(notification, request_id)
             results.append(result)

@@ -1,4 +1,4 @@
-"""Google Calendar API client — handles OAuth2, read, and write operations."""
+"""Google Calendar API client — read/write operations on the shared OAuth token."""
 
 from __future__ import annotations
 
@@ -7,16 +7,14 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+
+from alfred.integrations.google_auth import load_credentials
 
 log = structlog.get_logger()
 
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 
-# Default paths for credentials
 DEFAULT_CREDENTIALS_PATH = Path("config/google_credentials.json")
 DEFAULT_TOKEN_PATH = Path("config/google_token.json")
 
@@ -45,67 +43,20 @@ class GoogleCalendarClient:
         self._timezone = timezone
         self._service = None
 
-    def _get_credentials(self) -> Credentials:
-        """Load or refresh OAuth2 credentials."""
-        creds = None
-
-        if self._token_path.exists():
-            creds = Credentials.from_authorized_user_file(
-                str(self._token_path), SCOPES
-            )
-
-        if creds and creds.valid:
-            return creds
-
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            self._save_token(creds)
-            return creds
-
-        raise RuntimeError(
-            "No valid Google Calendar credentials. "
-            "Run 'alfred google-auth' to authenticate."
-        )
-
-    def _save_token(self, creds: Credentials) -> None:
-        """Persist the token for future use."""
-        self._token_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._token_path, "w") as f:
-            f.write(creds.to_json())
-
-    def _get_service(self):
+    def _get_service(self):  # type: ignore[no-untyped-def]
         """Get or create the Calendar API service."""
         if self._service is None:
-            creds = self._get_credentials()
-            self._service = build("calendar", "v3", credentials=creds)
-        return self._service
-
-    @classmethod
-    def run_oauth_flow(
-        cls,
-        credentials_path: Path | None = None,
-        token_path: Path | None = None,
-    ) -> None:
-        """Run the interactive OAuth2 consent flow. Call once during setup."""
-        creds_path = credentials_path or DEFAULT_CREDENTIALS_PATH
-        tok_path = token_path or DEFAULT_TOKEN_PATH
-
-        if not creds_path.exists():
-            raise FileNotFoundError(
-                f"Google OAuth credentials file not found at {creds_path}. "
-                "Download it from Google Cloud Console > APIs & Services > Credentials."
+            creds = load_credentials(
+                token_path=self._token_path,
+                credentials_path=self._credentials_path,
+                scopes=[CALENDAR_SCOPE],
             )
-
-        flow = InstalledAppFlow.from_client_secrets_file(
-            str(creds_path), SCOPES
-        )
-        creds = flow.run_local_server(port=0)
-
-        tok_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(tok_path, "w") as f:
-            f.write(creds.to_json())
-
-        log.info("google_auth_complete", token_path=str(tok_path))
+            if creds is None:
+                raise RuntimeError(
+                    "No valid Google token. Run `alfred google-auth` to authenticate."
+                )
+            self._service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        return self._service
 
     def get_calendar_id(self, family_member: str | None = None) -> str:
         """Resolve a family member name to a calendar ID."""

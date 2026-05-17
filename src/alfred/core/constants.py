@@ -8,6 +8,7 @@ class RequestSource(StrEnum):
     IMESSAGE = "imessage"
     SCHEDULER = "scheduler"
     REACTIVE = "reactive"
+    EMAIL = "email"
 
 
 class AgentStatus(StrEnum):

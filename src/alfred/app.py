@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -38,6 +40,7 @@ class App:
     agent_registry: AgentRegistry
     tool_registry: ToolRegistry
     litellm_client: LiteLLMClient
+    inbox_poller: Any = None  # InboxPoller | None — typed loosely to keep import chain quiet
 
     async def shutdown(self) -> None:
         """Clean up resources."""
@@ -97,14 +100,9 @@ async def create_app(config_dir: Path = Path("config")) -> App:
             channels["imessage"] = BlueBubblesClient(bb_url, bb_pass)
 
     if settings.notifications.email_enabled:
-        from alfred.notifications.channels.email import EmailClient
-
-        channels["email"] = EmailClient(
-            credentials_path=config_dir / "google_credentials.json",
-            token_path=config_dir / "google_token.json",
-            from_name=settings.notifications.email_from_name,
-            from_address=settings.notifications.email_from_address,
-        )
+        email_channel = _build_email_channel(settings, config_dir)
+        if email_channel is not None:
+            channels["email"] = email_channel
 
     notification_service = NotificationService(
         channels=channels,
@@ -129,6 +127,25 @@ async def create_app(config_dir: Path = Path("config")) -> App:
         notification_service=notification_service,
     )
 
+    # 9. Inbox poller (optional — iCloud IMAP with app-specific password)
+    inbox_poller: Any = None
+    if settings.inbox.enabled and settings.inbox.authorized_senders:
+        from alfred.inbox.poller import InboxPoller
+
+        icloud_addr = os.environ.get(settings.notifications.icloud_email_env, "").strip()
+        icloud_pw = os.environ.get(
+            settings.notifications.icloud_app_password_env, ""
+        ).strip()
+        if icloud_addr and icloud_pw:
+            # IMAP auth = the alias address itself, same as SMTP.
+            inbox_poller = InboxPoller(
+                username=icloud_addr,
+                app_password=icloud_pw,
+                authorized_senders=settings.inbox.authorized_senders,
+            )
+        else:
+            log.warning("inbox_poller_disabled_missing_env")
+
     log.info("app_initialized", agents=agent_registry.list_names())
 
     return App(
@@ -142,7 +159,95 @@ async def create_app(config_dir: Path = Path("config")) -> App:
         agent_registry=agent_registry,
         tool_registry=tool_registry,
         litellm_client=litellm_client,
+        inbox_poller=inbox_poller,
     )
+
+
+def _build_email_channel(settings: Settings, config_dir: Path) -> Any:
+    """Pick the email channel based on notifications.email_provider."""
+    cfg = settings.notifications
+    provider = cfg.email_provider.lower()
+
+    if provider == "icloud":
+        from alfred.notifications.channels.icloud_email import IcloudEmailClient
+
+        addr = os.environ.get(cfg.icloud_email_env, "").strip()
+        pw = os.environ.get(cfg.icloud_app_password_env, "").strip()
+        # SMTP auth = the alias address itself; the primary doesn't work here.
+        username = addr or None
+        if not addr or not pw:
+            log.warning(
+                "email_channel_disabled_missing_env",
+                provider="icloud",
+                missing=[
+                    k
+                    for k, v in [
+                        (cfg.icloud_email_env, addr),
+                        (cfg.icloud_app_password_env, pw),
+                    ]
+                    if not v
+                ],
+            )
+            return None
+        return IcloudEmailClient(
+            from_address=addr,
+            app_password=pw,
+            from_name=cfg.email_from_name,
+            smtp_username=username,
+        )
+
+    if provider == "gmail":
+        from alfred.notifications.channels.email import EmailClient
+
+        return EmailClient(
+            credentials_path=config_dir / "google_credentials.json",
+            token_path=config_dir / "google_token.json",
+            from_name=cfg.email_from_name,
+            from_address=cfg.email_from_address,
+        )
+
+    log.warning("email_provider_unknown", provider=provider)
+    return None
+
+
+def _build_calendar_client(
+    calendar_config: Any, settings: Settings
+) -> Any:
+    """Pick the calendar client based on calendar.yaml provider field."""
+    provider = calendar_config.provider.lower()
+
+    if provider == "icloud":
+        from alfred.agents.calendar.icloud_client import IcloudCalendarClient
+
+        addr = os.environ.get(settings.notifications.icloud_email_env, "").strip()
+        pw = os.environ.get(settings.notifications.icloud_app_password_env, "").strip()
+        username = (
+            os.environ.get(settings.notifications.icloud_username_env, "").strip()
+            or addr
+        )
+        if not addr or not pw:
+            log.warning(
+                "calendar_client_disabled_missing_env",
+                provider="icloud",
+            )
+            return None
+        return IcloudCalendarClient(
+            username=username,
+            app_password=pw,
+            calendar_name=calendar_config.icloud_calendar_name,
+            timezone=calendar_config.timezone,
+        )
+
+    if provider == "google":
+        from alfred.agents.calendar.google_client import GoogleCalendarClient
+
+        return GoogleCalendarClient(
+            calendar_ids=calendar_config.calendar_ids,
+            timezone=calendar_config.timezone,
+        )
+
+    log.warning("calendar_provider_unknown", provider=provider)
+    return None
 
 
 def _register_agents(
@@ -158,20 +263,19 @@ def _register_agents(
     if cal_config and cal_config.enabled:
         try:
             from alfred.agents.calendar.agent import CalendarAgent, CalendarConfig
-            from alfred.agents.calendar.google_client import GoogleCalendarClient
 
             calendar_config = CalendarConfig(config_dir)
-            google_client = GoogleCalendarClient(
-                calendar_ids=calendar_config.calendar_ids,
-                timezone=calendar_config.timezone,
-            )
-            agent = CalendarAgent(
-                google_client=google_client,
-                litellm_client=litellm_client,
-                calendar_config=calendar_config,
-                notification_service=notification_service,
-            )
-            registry.register(agent, cal_config)
+            client = _build_calendar_client(calendar_config, settings)
+            if client is None:
+                log.warning("calendar_agent_init_skipped", reason="no_client")
+            else:
+                agent = CalendarAgent(
+                    google_client=client,
+                    litellm_client=litellm_client,
+                    calendar_config=calendar_config,
+                    notification_service=notification_service,
+                )
+                registry.register(agent, cal_config)
         except Exception as e:
             log.warning("calendar_agent_init_failed", error=str(e))
 
