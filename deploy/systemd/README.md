@@ -59,3 +59,45 @@ sudo systemctl restart alfred-scheduler
 ```
 
 The symlinked file picks up changes without re-copying.
+
+## Log retention
+
+The unit sets `StandardOutput=journal` / `StandardError=journal`, so every
+`structlog` line from Alfred ends up in **journald**. By default journald
+keeps logs until disk pressure (no time limit). Recommend capping it.
+
+Edit `/etc/systemd/journald.conf` (or drop a file in
+`/etc/systemd/journald.conf.d/`):
+
+```ini
+[Journal]
+# Keep at most 30 days of logs.
+MaxRetentionSec=30day
+
+# Don't let the journal use more than 1 GB total.
+SystemMaxUse=1G
+
+# Force persistent storage (default on most distros, but explicit is fine).
+Storage=persistent
+```
+
+Then reload journald:
+
+```bash
+sudo systemctl restart systemd-journald
+```
+
+Verify what journald is using:
+
+```bash
+journalctl --disk-usage
+```
+
+Other things to know:
+- **`data/alfred.db` audit_log table** is *not* rotated by journald — it's a
+  separate persistent record of each agent request (tokens, cost, status).
+  Useful for budget review and regression hunting; no automatic cleanup
+  today. Trim manually with SQL if it grows.
+- **Phoenix traces** live in the `alfred-phoenix` container (`data/phoenix/`)
+  and have their own retention via Phoenix's own config. They're the
+  richest debugging surface (per-LLM-call spans) but also the heaviest.
