@@ -283,6 +283,7 @@ class CuratorAgent(AgentBase):
         model_name: str,
         request_id: str,
         compare_with: str | None = None,
+        max_candidates: int | None = None,
     ) -> AgentResult:
         """Fetch sources, triage, synthesize, render.
 
@@ -315,6 +316,14 @@ class CuratorAgent(AgentBase):
         # 1b. Annotate authorship signals for the triage prompt
         for item in candidates:
             annotate_authorship(item, cfg.top_labs, cfg.top_authors)
+
+        if max_candidates is not None and len(candidates) > max_candidates:
+            log.info(
+                "curator_candidate_cap",
+                before=len(candidates),
+                after=max_candidates,
+            )
+            candidates = candidates[:max_candidates]
 
         # 2. Triage (always local — cheap, fast). Throttled to avoid swamping the GPU.
         triage_agent, triage_prompt_fqn = _build_triage_agent(self._llm, "local-default")

@@ -20,7 +20,12 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
-async def run_routine(app: App, task: ScheduledTaskConfig, compare: bool = False) -> None:
+async def run_routine(
+    app: App,
+    task: ScheduledTaskConfig,
+    compare: bool = False,
+    max_items: int | None = None,
+) -> None:
     """Execute a single scheduled routine through the orchestrator (or direct, for compare)."""
     log.info("routine_start", task=task.name, agent=task.agent_name, compare=compare)
 
@@ -38,6 +43,7 @@ async def run_routine(app: App, task: ScheduledTaskConfig, compare: bool = False
             model_name="local-default",
             request_id="compare-run",
             compare_with="cloud-default",
+            max_candidates=max_items,
         )
         log.info("routine_finish", task=task.name, status="success", path=result.data.get("path"))
         return
@@ -109,11 +115,13 @@ async def run_scheduler(app: App) -> None:
         scheduler.shutdown(wait=False)
 
 
-async def run_routine_by_name(app: App, name: str, compare: bool = False) -> int:
+async def run_routine_by_name(
+    app: App, name: str, compare: bool = False, max_items: int | None = None
+) -> int:
     """Fire a single named routine once. Returns 0 on success, 1 on error."""
     for task in app.settings.scheduled_tasks:
         if task.name == name:
-            await run_routine(app, task, compare=compare)
+            await run_routine(app, task, compare=compare, max_items=max_items)
             return 0
     log.error("routine_not_found", name=name)
     return 1

@@ -48,9 +48,15 @@ def scheduler() -> None:
     is_flag=True,
     help="For curator: run synthesis through both local and cloud, write A/B file.",
 )
-def run_routine(name: str, compare: bool) -> None:
+@click.option(
+    "--max-items",
+    type=int,
+    default=None,
+    help="For curator: cap fetched candidates before triage (cost/safety bound).",
+)
+def run_routine(name: str, compare: bool, max_items: int | None) -> None:
     """Fire a single named routine once (for systemd timers, ad-hoc testing)."""
-    raise SystemExit(asyncio.run(_run_routine_once(name, compare=compare)))
+    raise SystemExit(asyncio.run(_run_routine_once(name, compare=compare, max_items=max_items)))
 
 
 @main.command()
@@ -234,12 +240,14 @@ async def _run_scheduler() -> None:
         await app.shutdown()
 
 
-async def _run_routine_once(name: str, compare: bool = False) -> int:
+async def _run_routine_once(
+    name: str, compare: bool = False, max_items: int | None = None
+) -> int:
     from alfred.scheduler.runner import run_routine_by_name
 
     app = await _get_app()
     try:
-        return await run_routine_by_name(app, name, compare=compare)
+        return await run_routine_by_name(app, name, compare=compare, max_items=max_items)
     finally:
         await app.shutdown()
 
