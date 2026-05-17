@@ -14,6 +14,7 @@ from typing import Any
 
 import structlog
 import yaml
+from opentelemetry import trace
 
 from alfred.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.calendar.google_client import GoogleCalendarClient
@@ -21,6 +22,8 @@ from alfred.agents.calendar.icloud_client import IcloudCalendarClient
 from alfred.agents.calendar.workflow import build_calendar_graph
 from alfred.core.models import TokenUsage
 from alfred.routing.clients import LiteLLMClient
+
+_tracer = trace.get_tracer("alfred.calendar.agent")
 
 CalendarClient = GoogleCalendarClient | IcloudCalendarClient
 
@@ -95,8 +98,16 @@ class CalendarAgent(AgentBase):
         )
 
     async def run(self, message: str, context: AgentContext) -> AgentResult:  # noqa: ARG002
-        initial_state = {"email_body": message}
-        final_state = await self._graph.ainvoke(initial_state)
+        # Parent span for the whole workflow — every node-level span and
+        # every LLM span ends up as a child of this one in Phoenix.
+        with _tracer.start_as_current_span("calendar.workflow") as span:
+            span.set_attribute("openinference.span.kind", "AGENT")
+            span.set_attribute("alfred.agent", "calendar")
+            span.set_attribute("alfred.email_body_chars", len(message))
+            initial_state = {"email_body": message}
+            final_state = await self._graph.ainvoke(initial_state)
+            outcome = final_state.get("outcome", "unknown")
+            span.set_attribute("alfred.outcome", outcome)
 
         reply_plain = final_state.get("reply_plain", "")
         reply_html = final_state.get("reply_html")

@@ -11,6 +11,7 @@ client calls) work either way.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -22,6 +23,29 @@ from icalendar import Event as IEvent
 log = structlog.get_logger()
 
 CALDAV_URL = "https://caldav.icloud.com"
+
+
+def _build_rrule(recurrence: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a RecurrenceRule dict (frequency/interval/byday/until_iso/count)
+    to the dict form icalendar expects for an RRULE property."""
+    freq = recurrence.get("frequency")
+    if not freq:
+        return None
+    out: dict[str, Any] = {"FREQ": freq}
+    interval = recurrence.get("interval") or 1
+    if interval and interval != 1:
+        out["INTERVAL"] = interval
+    byday = recurrence.get("byday") or []
+    if byday:
+        out["BYDAY"] = byday
+    until = recurrence.get("until_iso")
+    if until:
+        with contextlib.suppress(ValueError):
+            out["UNTIL"] = datetime.fromisoformat(until)
+    count = recurrence.get("count")
+    if count:
+        out["COUNT"] = count
+    return out
 
 
 def _ical_to_dict(ical_event: IEvent) -> dict[str, Any]:
@@ -195,6 +219,7 @@ class IcloudCalendarClient:
         location: str | None = None,
         calendar_id: str = "primary",  # unused — single configured calendar
         attendees: list[str] | None = None,  # noqa: ARG002 (CalDAV attendees TBD)
+        recurrence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if end is None:
             end = start + timedelta(hours=1)
@@ -211,6 +236,10 @@ class IcloudCalendarClient:
             event.add("description", description)
         if location:
             event.add("location", location)
+        if recurrence:
+            rrule = _build_rrule(recurrence)
+            if rrule:
+                event.add("rrule", rrule)
         uid = f"alfred-{int(start.timestamp())}-{abs(hash(summary)) % 10_000_000}"
         event.add("uid", uid)
         ical.add_component(event)
@@ -238,6 +267,29 @@ class IcloudCalendarClient:
             (uid, time.time() + self.RECENT_WRITES_TTL_SECONDS)
         )
         return out
+
+    def delete_event(self, event_uid: str) -> bool:
+        """Delete an event by UID. Returns True if found and deleted, False otherwise.
+
+        Also drops the entry from the recent-writes cache so subsequent
+        list_events queries reflect the deletion.
+        """
+        cal = self._get_calendar()
+        deleted = False
+        for evt in cal.events():
+            if event_uid in evt.data:
+                evt.delete()
+                deleted = True
+                log.info("calendar_event_deleted", event_uid=event_uid, provider="icloud")
+                break
+        # Drop from cache too
+        self._recent_writes = [e for e in self._recent_writes if e.get("id") != event_uid]
+        self._recent_writes_meta = [
+            m for m in self._recent_writes_meta if m[0] != event_uid
+        ]
+        if not deleted:
+            log.info("calendar_event_delete_miss", event_uid=event_uid, provider="icloud")
+        return deleted
 
     def find_conflicts(
         self,

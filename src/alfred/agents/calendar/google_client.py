@@ -128,6 +128,7 @@ class GoogleCalendarClient:
         location: str | None = None,
         calendar_id: str = "primary",
         attendees: list[str] | None = None,
+        recurrence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new calendar event."""
         service = self._get_service()
@@ -147,6 +148,19 @@ class GoogleCalendarClient:
             event_body["location"] = location
         if attendees:
             event_body["attendees"] = [{"email": a} for a in attendees]
+        if recurrence:
+            rrule_parts = [f"FREQ={recurrence['frequency']}"]
+            if recurrence.get("interval") and recurrence["interval"] != 1:
+                rrule_parts.append(f"INTERVAL={recurrence['interval']}")
+            if recurrence.get("byday"):
+                rrule_parts.append(f"BYDAY={','.join(recurrence['byday'])}")
+            if recurrence.get("until_iso"):
+                # Google expects YYYYMMDDTHHMMSSZ format with no separators.
+                until_dt = datetime.fromisoformat(recurrence["until_iso"])
+                rrule_parts.append(f"UNTIL={until_dt.strftime('%Y%m%dT%H%M%SZ')}")
+            if recurrence.get("count"):
+                rrule_parts.append(f"COUNT={recurrence['count']}")
+            event_body["recurrence"] = [f"RRULE:{';'.join(rrule_parts)}"]
 
         result = (
             service.events()
@@ -163,6 +177,17 @@ class GoogleCalendarClient:
         )
 
         return result
+
+    def delete_event(self, event_id: str, calendar_id: str = "primary") -> bool:
+        """Delete an event by ID. Returns True on success."""
+        service = self._get_service()
+        try:
+            service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+            log.info("calendar_event_deleted", event_id=event_id, provider="google")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("calendar_event_delete_failed", event_id=event_id, error=str(e))
+            return False
 
     def find_conflicts(
         self,

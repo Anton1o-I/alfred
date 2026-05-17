@@ -1,0 +1,40 @@
+[Unit]
+Description=Alfred — scheduled tasks (inbox poll, daily briefing, weekly preview, curator digest)
+Documentation=https://github.com/Anton1o-I/alfred
+# Network must be up before we hit iCloud / LiteLLM.
+After=network-online.target
+Wants=network-online.target
+# Docker stack (LiteLLM, Ollama, Phoenix) is a soft dependency — Alfred can
+# still start if it's not up, but routines that need an LLM will fail until
+# the proxy is reachable.
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=ant
+Group=ant
+WorkingDirectory=/home/ant/dev/home-agent
+EnvironmentFile=/home/ant/dev/home-agent/.env
+ExecStart=/home/ant/.local/bin/uv run alfred scheduler
+
+# Restart on crash with a 10s backoff. Cap retries so a fundamentally broken
+# build doesn't pin the CPU restarting forever — 5 attempts in 60s.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Output goes to journald — view with `journalctl -u alfred-scheduler -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alfred-scheduler
+
+# Minor hardening — limit blast radius if Alfred gets compromised.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
