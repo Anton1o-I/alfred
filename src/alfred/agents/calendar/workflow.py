@@ -60,41 +60,9 @@ log = structlog.get_logger()
 tracer = trace.get_tracer("alfred.calendar.workflow")
 
 
-# ── Code-side validation helpers ─────────────────────────────────────────
-# Local LLMs are eager to "complete" structured-extraction prompts — they
-# fill in plausible times and dates even when the email didn't mention any.
-# These regexes catch the most common cases so a vague request falls
-# through to a clarification reply instead of a silent (wrong) create.
-
-_TIME_RE = re.compile(
-    r"\b\d{1,2}(:\d{2})?\s*(am|pm|a\.m\.|p\.m\.)\b"
-    r"|\bnoon\b|\bmidnight\b"
-    r"|\b\d{1,2}:\d{2}\b",  # 14:30 24-hour
-    re.IGNORECASE,
-)
-
-_DATE_RE = re.compile(
-    r"\b(today|tomorrow|tonight)\b"
-    r"|\b(this|next)\s+(week|weekend|month|year)\b"
-    r"|\b(this|next)\s+(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b"
-    r"|\b(mon|tue|wed|thu|fri|sat|sun)(day)?\b"
-    r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b"
-    r"|\b\d{1,2}/\d{1,2}\b"
-    r"|\b\d{4}-\d{2}-\d{2}\b",
-    re.IGNORECASE,
-)
-
-_WEEKDAYS = {
-    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-    "friday": 4, "saturday": 5, "sunday": 6,
-    "mon": 0, "tue": 1, "tues": 1, "wed": 2, "thu": 3, "thur": 3, "thurs": 3,
-    "fri": 4, "sat": 5, "sun": 6,
-}
-_WEEKDAY_RE = re.compile(
-    r"\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day)?\b",
-    re.IGNORECASE,
-)
-
+# Stopwords for the delete branch's keyword-match heuristic. Anything
+# in this set is filtered out of the user's intent before we look for
+# slam-dunk title/location/description matches.
 _DELETE_STOPWORDS = {
     # Common filler words
     "the", "a", "an", "and", "or", "for", "with", "from", "this", "that",
@@ -111,40 +79,6 @@ _DELETE_STOPWORDS = {
     "week", "weeks", "month", "months", "year", "years", "weekend",
     "next", "last", "every",
 }
-
-
-def _has_explicit_time(text: str) -> bool:
-    return bool(_TIME_RE.search(text or ""))
-
-
-def _has_explicit_date(text: str) -> bool:
-    return bool(_DATE_RE.search(text or ""))
-
-
-def _email_mentions_weekday(text: str) -> int | None:
-    """If the email mentions a weekday name, return its Python weekday number (0=Mon)."""
-    if not text:
-        return None
-    m = _WEEKDAY_RE.search(text)
-    if not m:
-        return None
-    return _WEEKDAYS.get(m.group(1).lower())
-
-
-def _email_mentions_weekdays(text: str) -> set[int]:
-    """All weekday numbers mentioned anywhere in the text.
-
-    For 'every Tuesday and Thursday' we want to accept either day as
-    the valid start_iso — finding only the first weekday would reject
-    a Thursday start with the email mentioning Tuesday too.
-    """
-    if not text:
-        return set()
-    return {
-        _WEEKDAYS[m.group(1).lower()]
-        for m in _WEEKDAY_RE.finditer(text)
-        if m.group(1).lower() in _WEEKDAYS
-    }
 
 
 def _extract_meaningful_words(text: str) -> set[str]:
@@ -566,6 +500,16 @@ def build_calendar_graph(
             }
 
     async def validate_event(state: CalendarState) -> dict:
+        """Structural validation only — required fields and ISO format.
+
+        We deliberately do NOT check that the email body "mentions" a date
+        or time. That regex-based guard was overfit to the scenario suite
+        and produced false-negatives on natural phrasing ("June 17th" with
+        an ordinal suffix, weekday names in quoted-reply headers, etc.).
+        Qwen 3 with the typed-output schema is disciplined enough to be
+        trusted on the parse; the reply will surface obvious mistakes for
+        the user to correct.
+        """
         ev = state.get("parsed_event")
         if not ev:
             return {"outcome": "incomplete", "completeness_issues": ["no event parsed"]}
@@ -573,39 +517,12 @@ def build_calendar_graph(
         for field in ("title", "start_iso", "end_iso"):
             if not ev.get(field):
                 issues.append(f"missing {field}")
-        # Guard against the LLM inventing fields the user didn't actually say.
-        # If start_iso is set but the email body has no explicit time/date,
-        # treat it as a vague request and fall through to clarification.
-        email_body = state.get("email_body") or ""
-        if ev.get("start_iso"):
-            if not _has_explicit_time(email_body):
-                issues.append("no explicit time mentioned in email")
-            if not _has_explicit_date(email_body):
-                issues.append("no explicit date mentioned in email")
         if not issues:
             try:
-                start_dt = datetime.fromisoformat(ev["start_iso"])
+                datetime.fromisoformat(ev["start_iso"])
                 datetime.fromisoformat(ev["end_iso"])
             except ValueError as e:
                 issues.append(f"invalid ISO datetime: {e}")
-            else:
-                # If the user named specific weekday(s), the parsed start_iso
-                # must land on one of them. "every Tuesday and Thursday" →
-                # either Tue or Thu start is fine. Catches the common Qwen
-                # off-by-one ("next Wednesday" → Thursday).
-                wanted_wds = _email_mentions_weekdays(email_body)
-                if wanted_wds and start_dt.weekday() not in wanted_wds:
-                    wanted_names = sorted(
-                        {
-                            ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][w]
-                            for w in wanted_wds
-                        }
-                    )
-                    issues.append(
-                        f"date/weekday mismatch: email mentions "
-                        f"{'/'.join(wanted_names)} but start_iso is "
-                        f"{start_dt.strftime('%A %Y-%m-%d')}"
-                    )
         if issues:
             log.info("calendar_validate_failed", issues=issues)
             return {"outcome": "incomplete", "completeness_issues": issues}
