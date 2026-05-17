@@ -44,6 +44,18 @@ scheduled_tasks:
     message: "Poll inbox for inbound emails"
     enabled: true
 
+  - name: "daily_briefing"
+    cron: "0 7 * * *"  # Every day at 7:00 AM
+    agent_name: "briefing"
+    message: "daily"
+    enabled: true
+
+  - name: "weekly_preview"
+    cron: "0 18 * * 0"  # Sunday 6:00 PM
+    agent_name: "briefing"
+    message: "weekly"
+    enabled: true
+
 
   - name: "weekly_calendar_digest"
     cron: "0 18 * * 0"  # Sunday 6:00 PM

@@ -77,6 +77,25 @@ async def run_routine(
         log.info("routine_finish", task=task.name, status="success", **counts)
         return
 
+    # Calendar briefings: daily next-day reminder + Sunday week preview.
+    # `task.message` selects the mode ("daily" | "weekly").
+    if task.agent_name == "briefing":
+        from alfred.agents.calendar.briefing import (
+            run_daily_briefing,
+            run_weekly_preview,
+        )
+
+        mode = (task.message or "").strip().lower()
+        if mode == "daily":
+            result = await run_daily_briefing(app)
+        elif mode == "weekly":
+            result = await run_weekly_preview(app)
+        else:
+            log.warning("briefing_unknown_mode", task=task.name, mode=mode)
+            return
+        log.info("routine_finish", task=task.name, status="success", **result)
+        return
+
     # Curator goes direct (not through orchestrator) so we can email the
     # actual digest body with a proper subject. Non-compare runs also email;
     # compare runs just write the A/B file (review-only, no email).
@@ -130,7 +149,7 @@ def build_scheduler(app: App) -> AsyncIOScheduler:
 
     # Pseudo-agents that route through dedicated paths in run_routine
     # rather than the agent registry.
-    pseudo_agents = {"inbox"}
+    pseudo_agents = {"inbox", "briefing"}
 
     for task in enabled:
         if (
