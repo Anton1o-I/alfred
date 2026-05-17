@@ -76,7 +76,7 @@ scheduled_tasks:
     enabled: false
 
   - name: "weekly_research_curator"
-    cron: "0 18 * * 0"  # Sunday 6:00 PM
+    cron: "0 4 * * 1"  # Monday 4:00 AM — ready for the Monday morning read
     agent_name: "curator"
     message: "Generate the weekly research curator digest"
     enabled: true
