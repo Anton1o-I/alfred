@@ -2,11 +2,13 @@ imessage_enabled: true
 bluebubbles_url_env: "BLUEBUBBLES_URL"
 bluebubbles_password_env: "BLUEBUBBLES_PASSWORD"
 
-email_enabled: false
-sendgrid_api_key_env: "SENDGRID_API_KEY"
+email_enabled: true
+sendgrid_api_key_env: "SENDGRID_API_KEY"  # legacy field, unused — Gmail API path replaces it
+email_from_name: "Alfred · Research"  # Display name shown in recipient's inbox
+email_from_address: "alfred.iniguez.ai@gmail.com"
 
 recipients:
   - user_id: "primary"
-    preferred_channel: "imessage"
+    preferred_channel: "email"
     phone: ""
     email: "a.iniguez21@gmail.com"

@@ -15,6 +15,7 @@ class Notification(BaseModel):
     recipient: str
     subject: str | None = None
     body: str
+    html_body: str | None = None  # When set, email channel sends multipart/alternative
     priority: str = "normal"
     channel: NotificationChannel
     metadata: dict[str, Any] = {}

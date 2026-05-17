@@ -117,22 +117,34 @@ def prompts_show(prompt_id: str, version: str | None) -> None:
 
 
 @main.command()
-def google_auth() -> None:
-    """Run the Google Calendar OAuth2 flow (one-time setup)."""
-    from alfred.agents.calendar.google_client import GoogleCalendarClient
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    help="Don't open a browser (SSH case — forward the printed localhost URL).",
+)
+def google_auth(no_browser: bool) -> None:
+    """Run the Google OAuth consent flow. Grants Gmail + Calendar scopes in one consent."""
+    from pathlib import Path
 
-    click.echo("Starting Google Calendar OAuth2 flow...")
-    click.echo("A browser window will open. Sign in and grant calendar access.\n")
+    from alfred.integrations.google_auth import GMAIL_SEND_SCOPE, run_consent_flow
+
+    scopes = [GMAIL_SEND_SCOPE, "https://www.googleapis.com/auth/calendar"]
+    config_dir = Path(__file__).resolve().parent.parent / "config"
+
+    click.echo("Starting Google OAuth flow (Gmail send + Calendar)...")
+    click.echo("Sign in as Alfred's gmail account when the browser opens.\n")
     try:
-        GoogleCalendarClient.run_oauth_flow()
-        click.echo("\nAuthentication successful! Token saved to config/google_token.json")
-        click.echo("\nNext steps:")
-        click.echo("  1. Share your wife's calendar with your Google account")
-        click.echo("  2. Run 'alfred list-calendars' to find the calendar IDs")
-        click.echo("  3. Add the IDs to config/calendar.yaml")
+        creds = run_consent_flow(
+            credentials_path=config_dir / "google_credentials.json",
+            token_path=config_dir / "google_token.json",
+            scopes=scopes,
+            open_browser=not no_browser,
+        )
+        click.echo("\nAuthentication successful.")
+        click.echo(f"Granted scopes: {creds.scopes}")
+        click.echo(f"Token saved to: {config_dir / 'google_token.json'}")
     except FileNotFoundError as e:
         click.echo(f"\nError: {e}")
-        click.echo("See docs/calendar-setup.md for instructions.")
     except Exception as e:
         click.echo(f"\nAuthentication failed: {e}")
 

@@ -20,6 +20,31 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+async def _email_curator_digest(
+    app: App,
+    digest_path: str,
+    html_body: str | None,
+    request_id: str,
+) -> None:
+    """Send the curator's digest to all family recipients (multipart text + html)."""
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    body = Path(digest_path).read_text()
+    subject = f"Alfred Research Digest — {datetime.now(UTC).strftime('%Y-%m-%d')}"
+    results = await app.notification_service.send_to_family(
+        body=body,
+        subject=subject,
+        html_body=html_body,
+        request_id=request_id,
+    )
+    for r in results:
+        if not r.success:
+            log.warning(
+                "curator_email_failed", channel=r.channel, error=r.error
+            )
+
+
 async def run_routine(
     app: App,
     task: ScheduledTaskConfig,
@@ -29,23 +54,31 @@ async def run_routine(
     """Execute a single scheduled routine through the orchestrator (or direct, for compare)."""
     log.info("routine_start", task=task.name, agent=task.agent_name, compare=compare)
 
-    # Special path: curator A/B compare bypasses the orchestrator and calls the
-    # agent's generate_digest() directly, since the orchestrator only routes
-    # plain user messages.
-    if compare and task.agent_name == "curator":
+    # Curator goes direct (not through orchestrator) so we can email the
+    # actual digest body with a proper subject. Non-compare runs also email;
+    # compare runs just write the A/B file (review-only, no email).
+    if task.agent_name == "curator":
         from alfred.agents.curator import CuratorAgent
 
         agent = app.agent_registry.get("curator")
         if not isinstance(agent, CuratorAgent):
-            log.error("curator_not_registered_for_compare")
+            log.error("curator_not_registered")
             return
         result = await agent.generate_digest(
-            model_name="local-default",
-            request_id="compare-run",
-            compare_with="cloud-default",
+            model_name="cloud-default",
+            request_id=f"{task.name}-direct",
+            compare_with="local-default" if compare else None,
             max_candidates=max_items,
         )
-        log.info("routine_finish", task=task.name, status="success", path=result.data.get("path"))
+        path = result.data.get("path")
+        log.info("routine_finish", task=task.name, status="success", path=path)
+        if not compare and path:
+            await _email_curator_digest(
+                app,
+                path,
+                html_body=result.data.get("html"),
+                request_id=f"{task.name}-direct",
+            )
         return
 
     request = AgentRequest(

@@ -75,7 +75,11 @@ class NotificationService:
         return result
 
     async def send_to_family(
-        self, body: str, subject: str | None = None, request_id: str = ""
+        self,
+        body: str,
+        subject: str | None = None,
+        html_body: str | None = None,
+        request_id: str = "",
     ) -> list[NotificationResult]:
         """Send a notification to all family members via their preferred channel."""
         results = []
@@ -84,6 +88,7 @@ class NotificationService:
                 recipient=recipient.phone or recipient.email or recipient.user_id,
                 subject=subject,
                 body=body,
+                html_body=html_body,
                 channel=recipient.preferred_channel,
             )
             result = await self.send(notification, request_id)
@@ -91,7 +96,12 @@ class NotificationService:
         return results
 
     async def send_to_user(
-        self, user_id: str, body: str, subject: str | None = None, request_id: str = ""
+        self,
+        user_id: str,
+        body: str,
+        subject: str | None = None,
+        html_body: str | None = None,
+        request_id: str = "",
     ) -> NotificationResult:
         """Send a notification to a specific user via their preferred channel."""
         recipient = self._recipients.get(user_id)
@@ -106,6 +116,7 @@ class NotificationService:
             recipient=recipient.phone or recipient.email or user_id,
             subject=subject,
             body=body,
+            html_body=html_body,
             channel=recipient.preferred_channel,
         )
         return await self.send(notification, request_id)

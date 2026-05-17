@@ -96,6 +96,16 @@ async def create_app(config_dir: Path = Path("config")) -> App:
         if bb_url:
             channels["imessage"] = BlueBubblesClient(bb_url, bb_pass)
 
+    if settings.notifications.email_enabled:
+        from alfred.notifications.channels.email import EmailClient
+
+        channels["email"] = EmailClient(
+            credentials_path=config_dir / "google_credentials.json",
+            token_path=config_dir / "google_token.json",
+            from_name=settings.notifications.email_from_name,
+            from_address=settings.notifications.email_from_address,
+        )
+
     notification_service = NotificationService(
         channels=channels,
         config=settings.notifications,

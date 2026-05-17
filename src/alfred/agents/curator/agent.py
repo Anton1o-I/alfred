@@ -17,7 +17,11 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from alfred.agents.base import AgentBase, AgentContext, AgentResult
-from alfred.agents.curator.render import render_comparison, render_digest
+from alfred.agents.curator.render import (
+    render_comparison,
+    render_digest,
+    render_digest_html,
+)
 from alfred.agents.curator.sources import (
     CandidateItem,
     annotate_authorship,
@@ -435,11 +439,15 @@ class CuratorAgent(AgentBase):
         generated_at = datetime.now(UTC)
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
+        html: str | None = None
         if compare_with:
             md = render_comparison(items_by_model, cfg.topics_by_id, generated_at)
             outfile = cfg.output_dir / f"{generated_at.strftime('%Y-%m-%d')}-comparison.md"
         else:
             md = render_digest(
+                items_by_model[model_name], cfg.topics_by_id, model_name, generated_at
+            )
+            html = render_digest_html(
                 items_by_model[model_name], cfg.topics_by_id, model_name, generated_at
             )
             outfile = cfg.output_dir / f"{generated_at.strftime('%Y-%m-%d')}.md"
@@ -452,7 +460,12 @@ class CuratorAgent(AgentBase):
                 f"Digest written: {outfile} "
                 f"({len(top)} items across {len(models_to_run)} model(s))"
             ),
-            data={"path": str(outfile), "items": len(top), "models": models_to_run},
+            data={
+                "path": str(outfile),
+                "items": len(top),
+                "models": models_to_run,
+                "html": html,
+            },
             usage=total_usage,
         )
 

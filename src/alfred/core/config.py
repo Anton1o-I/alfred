@@ -61,6 +61,8 @@ class NotificationConfig(BaseModel):
     bluebubbles_password_env: str = "BLUEBUBBLES_PASSWORD"
     email_enabled: bool = False
     sendgrid_api_key_env: str = "SENDGRID_API_KEY"
+    email_from_name: str = "Alfred"  # Display name in the From header
+    email_from_address: str = ""  # Must match the OAuth-authorized Gmail account
     recipients: list[RecipientConfig] = []
 
 
