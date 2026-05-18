@@ -176,8 +176,25 @@ class EventDraft(BaseModel):
     """Output of the event-parser node."""
 
     title: str = Field(description="Concise human-readable event name.")
-    start_iso: str = Field(description="ISO 8601 with timezone offset.")
-    end_iso: str = Field(description="ISO 8601 with timezone offset.")
+    start_iso: str | None = Field(
+        default=None,
+        description=(
+            "ISO 8601 with timezone offset. **Leave null if the user did NOT "
+            "give a clear date AND time** — never guess. The downstream "
+            "validator will fall through to asking the user for clarification "
+            "when this is null, which is exactly the right behavior for "
+            "vague requests like 'schedule a meeting next week' (no day) "
+            "or 'coffee with Eric tomorrow' (no time)."
+        ),
+    )
+    end_iso: str | None = Field(
+        default=None,
+        description=(
+            "ISO 8601 with timezone offset. Leave null whenever start_iso is "
+            "null. When start_iso is set, default to start + 1 hour if the "
+            "user gave no explicit end or duration."
+        ),
+    )
     location: str | None = None
     description: str | None = None
     recurrence: RecurrenceRule | None = Field(
@@ -357,18 +374,32 @@ _PARSE_PROMPT = (
     "{upcoming_table}\n"
     "\n"
     "Rules:\n"
-    "- start_iso and end_iso must be ISO 8601 with the timezone offset for {timezone_name}.\n"
-    "- If duration is not specified, default to 1 hour.\n"
     "- title: short human-readable event name. Include who it's WITH (names "
     "  of people) or what it's ABOUT directly in the title. Examples: "
     "  'Lunch with Sarah', 'Q3 budget review with finance team', "
     "  'Coffee with Eric'. Do NOT prefix titles with action verbs like "
     "  'Add', 'Create', or 'Schedule' — those are commands, not part of "
     "  the event name.\n"
+    "- start_iso and end_iso must be ISO 8601 with the timezone offset for {timezone_name}.\n"
+    "- If a duration is not specified but start_iso IS set, default end to "
+    "  start + 1 hour.\n"
     "- location: ONLY physical places ('Cafe Luna', '123 Main St') or "
     "  video links ('Zoom', 'meet.google.com/abc'). Do NOT put people's "
     "  names here — they belong in the title.\n"
     "- description: optional free-form notes the user explicitly provides.\n"
+    "\n"
+    "DO NOT GUESS DATES OR TIMES. If the user did not give a clear date AND\n"
+    "time, leave start_iso and end_iso as null. The system will ask the user\n"
+    "for clarification rather than booking a wrong event. Examples:\n"
+    "- 'Schedule a meeting next week' → start_iso=null, end_iso=null "
+    "(no specific day, no time)\n"
+    "- 'Coffee with Eric tomorrow' → start_iso=null, end_iso=null "
+    "(has a date but no time)\n"
+    "- 'Meeting at 3pm to review the budget' → start_iso=null, end_iso=null "
+    "(has a time but no date)\n"
+    "- 'Lunch with Sarah on May 20 at 12:30pm' → both fields filled in\n"
+    "Returning null is the correct, expected behavior for vague requests.\n"
+    "Filling in invented values silently books wrong events.\n"
     "\n"
     "Recurrence:\n"
     "- Leave recurrence null for one-off events.\n"
