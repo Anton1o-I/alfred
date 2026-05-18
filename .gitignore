@@ -43,6 +43,7 @@ Thumbs.db
 logs/
 *.log
 data/digests/
+data/sim_briefings/
 
 # Coverage and testing
 .coverage

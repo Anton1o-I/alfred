@@ -131,6 +131,33 @@ async def _run_simulation(
         await litellm_client.close()
 
 
+@main.command(name="simulate-briefing")
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory to write rendered .md and .html outputs. Default: data/sim_briefings/",
+)
+def simulate_briefing(output_dir: Path | None) -> None:
+    """Render the daily briefing across a handful of scenarios.
+
+    Calls the real local LLM, dumps .md + .html per scenario so you can
+    eyeball the output before deploying briefing changes.
+    """
+    asyncio.run(_run_briefing_sim(output_dir))
+
+
+async def _run_briefing_sim(output_dir: Path | None) -> None:
+    from sim.briefing_sim import run_briefing_sim
+
+    from alfred.observability import init_observability
+
+    init_observability()
+    code = await run_briefing_sim(output_dir)
+    if code:
+        raise SystemExit(code)
+
+
 @main.command()
 def topics() -> None:
     """List active topic interests."""

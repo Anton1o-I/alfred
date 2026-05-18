@@ -23,7 +23,7 @@ All facts (event list, times, day stats) come from code. The LLM can't invent.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -42,24 +42,39 @@ log = structlog.get_logger()
 
 
 class DailyNarrative(BaseModel):
+    lead_section: Literal["events", "chores"] = Field(
+        description=(
+            "Which section should appear FIRST in the email. Use 'chores' "
+            "when: (a) the calendar has no events, OR (b) there is at "
+            "least one overdue chore, OR (c) the events are light/routine "
+            "while there are multiple chores due today or tomorrow. "
+            "Use 'events' otherwise. This is a judgment call — pick the "
+            "section the reader most needs to act on."
+        )
+    )
     greeting: str = Field(
         description=(
             "Short opener, 5-10 words, friendly but understated. "
-            "Examples: 'Heads up for tomorrow', 'Quick rundown', 'Light Monday ahead'."
+            "Examples: 'Heads up for tomorrow', 'Quick rundown', 'Light Monday ahead', "
+            "'Chores to tackle tomorrow'. Match the lead_section in tone — if chores "
+            "lead, the greeting should acknowledge that, not pretend it's about events."
         )
     )
     summary: str = Field(
         description=(
-            "2-3 sentences narrating the shape of the day — when it's busy, when it's "
-            "open, anything worth flagging. Stick to what's in the events + analysis. "
-            "Don't invent meetings or people."
+            "1-2 sentences narrating what tomorrow looks like. Mention the lead "
+            "section's content concretely (e.g. 'two overdue chores' or 'three meetings, "
+            "open afternoon'). Facts only — never invent events, names, or chores not in "
+            "the data. If the day is genuinely uneventful, say so plainly in ONE sentence."
         )
     )
     observations: list[str] = Field(
         default_factory=list,
         description=(
-            "0-3 short bullets, each ≤80 chars. Useful things like '3-hour open block 12–3pm' "
-            "or 'No lunch on the calendar'. Skip if nothing notable."
+            "0-3 short bullets, each ≤80 chars, ONLY for things genuinely worth "
+            "flagging: a 3+ hour open block, a tight transition, no lunch, an "
+            "overdue chore worth a nudge. Return an EMPTY LIST if nothing is "
+            "notable — do not pad. Never restate what's already in the summary."
         ),
     )
 
@@ -82,7 +97,9 @@ class WeeklyNarrative(BaseModel):
 
 
 _DAILY_PROMPT = (
-    "You are writing a brief, friendly heads-up about tomorrow's calendar for one person.\n"
+    "You are writing a brief, friendly heads-up about tomorrow for one person.\n"
+    "Two sections may appear: calendar events and household chores. Your job is to\n"
+    "(a) decide which section LEADS the email, and (b) write a short narrative.\n"
     "\n"
     "Tomorrow: {label}\n"
     "Timezone: {tz}\n"
@@ -90,23 +107,52 @@ _DAILY_PROMPT = (
     "Events ({event_count}):\n"
     "{events_block}\n"
     "\n"
-    "Analysis (computed):\n"
+    "Event analysis (computed):\n"
     "- Total scheduled time: {total_minutes} minutes\n"
     "- First event starts at: {first_start}\n"
     "- Last event ends at: {last_end}\n"
     "- Open blocks (>= 60 min between events): {open_blocks}\n"
     "- Tight transitions (< 15 min gap): {tight_transitions}\n"
-    "- Lunch window covered (11:30am - 1:30pm): {has_lunch}\n"
     "\n"
-    "Write a short, friendly briefing. Keep it grounded in the data — do not invent "
-    "events, people, or context. Return a typed DailyNarrative.\n"
+    "Chores:\n"
+    "{chores_block}\n"
     "\n"
-    "Tone notes:\n"
-    "- Friendly but understated — like a thoughtful assistant, not a marketer.\n"
-    "- No forced cheer ('Have a great day!').\n"
-    "- If the day is very light, say so plainly.\n"
-    "- If lunch isn't covered, you may mention it as an observation.\n"
-    "- Times in greetings/summary should use 12-hour with am/pm (lowercase ok)."
+    "How to pick lead_section:\n"
+    "- If there are no events, lead with 'chores'.\n"
+    "- If any chore is overdue, lead with 'chores' (the user needs to act).\n"
+    "- If events are sparse (e.g. 1 short event) and multiple chores are due today\n"
+    "  or tomorrow, lead with 'chores'.\n"
+    "- Otherwise lead with 'events'.\n"
+    "\n"
+    "Tone & content rules:\n"
+    "- Friendly but understated. No forced cheer ('Have a great day!'). No emoji.\n"
+    "- Comment on what IS on the calendar. Do not invent things to worry about\n"
+    "  (no 'remember to eat', no 'don't forget lunch', no filler advice).\n"
+    "- When the day is light, ONE short sentence is enough — e.g. 'Tomorrow looks\n"
+    "  clear, nothing on the calendar.' Do not pad with observations.\n"
+    "- When events exist, name them specifically (title + time) in the summary,\n"
+    "  don't just say 'you have a few meetings'.\n"
+    "- Times use 12-hour with am/pm (lowercase ok).\n"
+    "\n"
+    "Chore status precision — read carefully:\n"
+    "- Items under OVERDUE are overdue. Items under DUE TODAY are NOT overdue;\n"
+    "  they are due today. Items under DUE TOMORROW are not yet due.\n"
+    "- Never call a 'due today' or 'due tomorrow' chore 'overdue'.\n"
+    "\n"
+    "Observations rules — read carefully:\n"
+    "- Observations must add NEW information not already in the Events or\n"
+    "  Chores sections. Do NOT restate or re-list chores or events.\n"
+    "- Valid observations are about the SHAPE of the day: tight transitions\n"
+    "  between specific events, an unusually long open block, the day starting\n"
+    "  unusually early or running unusually late.\n"
+    "- Listing a chore that already appears in the Chores section is NOT a\n"
+    "  valid observation. Do not do it.\n"
+    "- If nothing structurally notable, return an EMPTY observations list.\n"
+    "  An empty list is the correct answer most of the time.\n"
+    "\n"
+    "Never invent events, chores, names, or context not in the data above.\n"
+    "\n"
+    "Return a typed DailyNarrative."
 )
 
 
@@ -181,7 +227,7 @@ def _get_calendar_client(app: App):  # type: ignore[no-untyped-def]
 
 
 def analyze_day(events: list[dict], tz: ZoneInfo) -> dict:
-    """Compute the day's shape: gaps, totals, lunch coverage, tight transitions."""
+    """Compute the day's shape: gaps, totals, tight transitions."""
     if not events:
         return {
             "event_count": 0,
@@ -190,7 +236,6 @@ def analyze_day(events: list[dict], tz: ZoneInfo) -> dict:
             "last_end": None,
             "open_blocks": [],
             "tight_transitions": [],
-            "has_lunch_window": False,
         }
     total_minutes = 0.0
     for ev in events:
@@ -222,14 +267,6 @@ def analyze_day(events: list[dict], tz: ZoneInfo) -> dict:
                 }
             )
 
-    # Lunch coverage: any event whose start is between 11:30 and 13:30 local.
-    has_lunch = False
-    for ev in events:
-        dt = datetime.fromisoformat(ev["start_iso"]).astimezone(tz)
-        if dt.hour + dt.minute / 60 < 13.5 and dt.hour + dt.minute / 60 >= 11.5:
-            has_lunch = True
-            break
-
     return {
         "event_count": len(events),
         "total_minutes": int(total_minutes),
@@ -237,7 +274,6 @@ def analyze_day(events: list[dict], tz: ZoneInfo) -> dict:
         "last_end": _fmt_time(events[-1]["end_iso"], tz),
         "open_blocks": open_blocks,
         "tight_transitions": tight,
-        "has_lunch_window": has_lunch,
     }
 
 
@@ -297,23 +333,38 @@ def _render_email(
     observations: list[str],
     chores_section_plain: str | None = None,
     chores_section_html: str | None = None,
+    lead_section: Literal["events", "chores"] = "events",
 ) -> tuple[str, str]:
-    """Shared render shape for daily + weekly."""
-    # Plain
+    """Shared render shape for daily + weekly.
+
+    `lead_section` controls whether Events or Chores appears first. Weekly
+    previews don't have chores; they always pass lead_section='events'.
+    """
+    has_chores = bool(chores_section_plain or chores_section_html)
+    chores_lead = lead_section == "chores" and has_chores
+
+    # Plain — section order driven by lead_section.
     plain_parts = [
         narrative.greeting.strip(),
         "",
         narrative.summary.strip(),
         "",
-        "Events",
-        "─" * 30,
-        events_section_plain,
     ]
-    if chores_section_plain:
-        plain_parts.append("")
-        plain_parts.append("Chores")
+    sections_plain: list[tuple[str, str]] = []
+    if chores_lead:
+        if chores_section_plain:
+            sections_plain.append(("Chores", chores_section_plain))
+        sections_plain.append(("Events", events_section_plain))
+    else:
+        sections_plain.append(("Events", events_section_plain))
+        if chores_section_plain:
+            sections_plain.append(("Chores", chores_section_plain))
+    for i, (title, body) in enumerate(sections_plain):
+        if i > 0:
+            plain_parts.append("")
+        plain_parts.append(title)
         plain_parts.append("─" * 30)
-        plain_parts.append(chores_section_plain)
+        plain_parts.append(body)
     if observations:
         plain_parts.append("")
         plain_parts.append("Observations")
@@ -322,7 +373,7 @@ def _render_email(
             plain_parts.append(f"• {obs}")
     plain = "\n".join(plain_parts).rstrip() + "\n"
 
-    # HTML
+    # HTML — same section ordering.
     body_style = (
         "margin: 0; padding: 0; background: #f5f5f7; "
         f"font-family: {_FONT_STACK}; color: #1d1d1f;"
@@ -355,12 +406,19 @@ def _render_email(
         f'<p style="{header_style}">{headline}</p>',
         f'<h1 style="{greeting_style}">{_escape(narrative.greeting)}</h1>',
         f'<p style="{summary_style}">{_escape(narrative.summary)}</p>',
-        f'<h2 style="{section_h_style}">Events</h2>',
-        events_section_html,
     ]
-    if chores_section_html:
-        parts.append(f'<h2 style="{section_h_style}">Chores</h2>')
-        parts.append(chores_section_html)
+    sections_html: list[tuple[str, str]] = []
+    if chores_lead:
+        if chores_section_html:
+            sections_html.append(("Chores", chores_section_html))
+        sections_html.append(("Events", events_section_html))
+    else:
+        sections_html.append(("Events", events_section_html))
+        if chores_section_html:
+            sections_html.append(("Chores", chores_section_html))
+    for title, body in sections_html:
+        parts.append(f'<h2 style="{section_h_style}">{title}</h2>')
+        parts.append(body)
     if observations:
         parts.append(f'<h2 style="{section_h_style}">Observations</h2>')
         parts.append(f'<ul style="{obs_list_style}">')
@@ -518,6 +576,7 @@ async def run_daily_briefing(app: App) -> dict:
         observations=narrative.observations,
         chores_section_plain=chores_plain,
         chores_section_html=chores_html,
+        lead_section=narrative.lead_section,
     )
     subject = f"Tomorrow's schedule — {_fmt_short_date(tomorrow)}"
     await _send(app, subject, plain, html, force_user_ids=chore_data["shame_user_ids"])
@@ -630,6 +689,29 @@ def _calendar_timezone(app: App) -> str:
     return agent._config.timezone  # noqa: SLF001
 
 
+def _render_chores_for_prompt(categorized: dict | None) -> str:
+    """Plain-text chore listing fed to the LLM so it can reason about specifics.
+
+    Format mirrors the rendered email so the LLM and the user see the same facts.
+    """
+    if not categorized:
+        return "(no chores tracked)"
+    buckets = (
+        ("OVERDUE", categorized.get("overdue", [])),
+        ("DUE TODAY", categorized.get("due_today", [])),
+        ("DUE TOMORROW", categorized.get("due_tomorrow", [])),
+    )
+    lines: list[str] = []
+    for label, statuses in buckets:
+        if not statuses:
+            continue
+        lines.append(label)
+        for s in statuses:
+            suffix = f" — {s.overdue_days}d overdue" if s.overdue_days > 0 else ""
+            lines.append(f"  - {s.chore.title} ({s.chore.assignee}){suffix}")
+    return "\n".join(lines) if lines else "(no chores due in the next day)"
+
+
 async def _generate_daily_narrative(
     app: App,
     day: date,
@@ -640,34 +722,18 @@ async def _generate_daily_narrative(
 ) -> DailyNarrative:
     agent = _make_narrative_agent(app.litellm_client, DailyNarrative, "local-default")
     events_block = _render_events_plain(events, tz)
-    chores_summary = "(none tracked)"
-    if categorized_chores:
-        bits = []
-        if categorized_chores["overdue"]:
-            worst = max(s.overdue_days for s in categorized_chores["overdue"])
-            bits.append(f"{len(categorized_chores['overdue'])} overdue (worst {worst}d)")
-        if categorized_chores["due_today"]:
-            bits.append(f"{len(categorized_chores['due_today'])} due today")
-        if categorized_chores["due_tomorrow"]:
-            bits.append(f"{len(categorized_chores['due_tomorrow'])} due tomorrow")
-        if bits:
-            chores_summary = ", ".join(bits)
-    prompt = (
-        _DAILY_PROMPT.format(
-            label=day.strftime("%A, %B %-d, %Y"),
-            tz=tz.key,
-            event_count=analysis["event_count"],
-            events_block=events_block,
-            total_minutes=analysis["total_minutes"],
-            first_start=analysis["first_start"] or "—",
-            last_end=analysis["last_end"] or "—",
-            open_blocks=analysis["open_blocks"] or "(none)",
-            tight_transitions=analysis["tight_transitions"] or "(none)",
-            has_lunch=analysis["has_lunch_window"],
-        )
-        + f"\n\nChore burden: {chores_summary}.\n"
-        "If chores are overdue or due tomorrow, briefly acknowledge them in the "
-        "summary or as an observation — do not invent any."
+    chores_block = _render_chores_for_prompt(categorized_chores)
+    prompt = _DAILY_PROMPT.format(
+        label=day.strftime("%A, %B %-d, %Y"),
+        tz=tz.key,
+        event_count=analysis["event_count"],
+        events_block=events_block,
+        total_minutes=analysis["total_minutes"],
+        first_start=analysis["first_start"] or "—",
+        last_end=analysis["last_end"] or "—",
+        open_blocks=analysis["open_blocks"] or "(none)",
+        tight_transitions=analysis["tight_transitions"] or "(none)",
+        chores_block=chores_block,
     )
     result = await agent.run(prompt)
     return result.output
