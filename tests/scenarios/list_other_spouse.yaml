@@ -1,0 +1,45 @@
+# Tasks LIST scenarios — scoped to the OTHER spouse via several phrasings.
+#
+# Covers natural phrasings that route through the assignee filter:
+#   • Explicit name ("Sam's chores")
+#   • Indirect reference ("my spouse")
+
+- name: list_show_sams_chores
+  kind: tasks
+  email: |
+    Show me Sam's chores.
+  today: "2026-05-17"
+  initial_chores:
+    - id: mow-lawn
+      title: "Mow lawn"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+    - id: clean-bathrooms
+      title: "Clean bathrooms"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: listed
+    reply_contains: ["Sam", "bathrooms"]
+    reply_excludes: ["Mow"]
+
+- name: list_what_does_my_spouse_owe
+  kind: tasks
+  email: |
+    What does my spouse owe right now?
+  today: "2026-05-17"
+  # The sender is treated as primary (Alex) in the sim runner. "My spouse"
+  # should route to secondary (Sam). This is the loosest phrasing — if the
+  # classifier can't tie "my spouse" to a slot, list_target stays null and
+  # we fall back to an unscoped list. Either way outcome stays 'listed'.
+  initial_chores:
+    - id: clean-bathrooms
+      title: "Clean bathrooms"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: listed
+    reply_contains: ["bathrooms"]

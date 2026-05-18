@@ -124,11 +124,15 @@ def _reply_updated(state: dict[str, Any], name_map: dict[str, str]) -> ReplyPayl
 
 def _reply_listed(state: dict[str, Any], name_map: dict[str, str]) -> ReplyPayload:
     summary = state.get("pending_summary") or []
+    scope_label = (state.get("list_target_label") or "").strip()
+    header = f"{scope_label}'s chores" if scope_label else "Your chores"
     if not summary:
-        return ReplyPayload(
-            header="Your chores",
-            body="No chores are currently being tracked.",
+        empty_body = (
+            f"No pending chores for {scope_label}."
+            if scope_label
+            else "No chores are currently being tracked."
         )
+        return ReplyPayload(header=header, body=empty_body)
     overdue = [s for s in summary if s["overdue_days"] > 0]
     due_today = [s for s in summary if s["overdue_days"] == 0]
     upcoming = [s for s in summary if s["overdue_days"] < 0]

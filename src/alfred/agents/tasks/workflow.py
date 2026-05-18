@@ -97,6 +97,8 @@ class TasksState(TypedDict, total=False):
 
     # List branch
     pending_summary: list[dict]
+    list_target: dict  # {"reference": str} — assignee scope for list action
+    list_target_label: str  # humanized scope label, e.g. "Alex" / "Household"
 
     # Outcome (one of the Outcome enum values)
     outcome: str
@@ -215,12 +217,26 @@ def build_tasks_graph(
             action=invocation.output.action,
             complexity=invocation.output.complexity,
             reasoning=invocation.output.reasoning[:120],
+            list_target=(
+                invocation.output.list_target.reference
+                if invocation.output.list_target
+                else None
+            ),
         )
-        return {
+        updates: dict[str, Any] = {
             "action": invocation.output.action,
             "complexity": invocation.output.complexity,
             **invocation.updates,
         }
+        if (
+            invocation.output.action == "list"
+            and invocation.output.list_target is not None
+            and invocation.output.list_target.reference.strip()
+        ):
+            updates["list_target"] = {
+                "reference": invocation.output.list_target.reference.strip(),
+            }
+        return updates
 
     async def parse_chore_draft(state: TasksState) -> dict[str, Any]:
         """LLM: parse the user's email into a typed ChoreDraft."""
@@ -576,10 +592,30 @@ def build_tasks_graph(
 
     # ── List branch ──────────────────────────────────────────────────────
 
-    async def render_pending_summary(_state: TasksState) -> dict[str, Any]:
+    async def render_pending_summary(state: TasksState) -> dict[str, Any]:
         tz = ZoneInfo(timezone_name)
         now = now_fn() if now_fn is not None else datetime.now(tz)
         statuses = await store.status_for_all_active(now=now, tz=tz)
+
+        target = state.get("list_target") or {}
+        reference = (target.get("reference") or "").strip()
+        filter_slot = _resolve_assignee_filter(reference, name_map) if reference else None
+        if filter_slot is not None:
+            statuses = _filter_pending_by_assignee(statuses, filter_slot)
+            label = _assignee_filter_label(filter_slot, name_map)
+            log.info(
+                "tasks_list_filtered",
+                reference=reference, filter_slot=filter_slot,
+                kept=len(statuses),
+            )
+        else:
+            label = ""
+            if reference:
+                log.info(
+                    "tasks_list_filter_unresolved",
+                    reference=reference,
+                )
+
         summary = [
             {
                 "id": s.chore.id,
@@ -593,7 +629,11 @@ def build_tasks_graph(
             }
             for s in statuses
         ]
-        return {"pending_summary": summary, "outcome": Outcome.LISTED.value}
+        return {
+            "pending_summary": summary,
+            "list_target_label": label,
+            "outcome": Outcome.LISTED.value,
+        }
 
     # ── Update branch ────────────────────────────────────────────────────
 
@@ -908,6 +948,66 @@ def _best_shape_match(
         if verdict == "high":
             break
     return best
+
+
+# Household-scope phrases the user might type to mean "filter to household".
+# Personal-name matches go through `name_map` (case-insensitive). These never
+# resolve to 'primary'/'secondary' — they only target the shared bucket.
+_HOUSEHOLD_ALIASES: frozenset[str] = frozenset(
+    {"household", "the household", "us", "we", "the family", "family", "everyone"}
+)
+
+
+def _resolve_assignee_filter(
+    reference: str, name_map: dict[str, str]
+) -> str | None:
+    """Resolve a user phrase to an assignee slot, or None if no match.
+
+    Match order:
+      1. Exact slot literals ('primary'/'secondary'/'household').
+      2. Household aliases ('us', 'the family', …).
+      3. Case-insensitive display-name match from name_map ('Alex' → primary).
+
+    Returns 'primary' / 'secondary' / 'household' / None.
+    """
+    ref = reference.strip().lower()
+    if not ref:
+        return None
+    if ref in ("primary", "secondary", "household"):
+        return ref
+    if ref in _HOUSEHOLD_ALIASES:
+        return "household"
+    for slot, display in name_map.items():
+        if display and display.lower() == ref:
+            return slot
+    # Loose contains for phrasings like "what does Alex owe" if the model
+    # echoed the full clause rather than just the name.
+    for slot, display in name_map.items():
+        if display and display.lower() in ref:
+            return slot
+    if any(alias in ref for alias in _HOUSEHOLD_ALIASES):
+        return "household"
+    return None
+
+
+def _assignee_filter_label(slot: str, name_map: dict[str, str]) -> str:
+    """Display label for the filtered list header."""
+    if slot == "household":
+        return "Household"
+    return name_map.get(slot) or slot.title()
+
+
+def _filter_pending_by_assignee[T: Any](
+    statuses: list[T], filter_slot: str
+) -> list[T]:
+    """Keep only statuses whose chore.assignee matches the requested slot.
+
+    Personal slots ('primary'/'secondary') match only that exact slot — they
+    do NOT include household chores, because the user explicitly asked
+    "what does <person> owe". The 'household' filter matches only household
+    chores. Tests cover both cases.
+    """
+    return [s for s in statuses if s.chore.assignee == filter_slot]
 
 
 def _build_update_fields(draft: dict[str, Any]) -> dict[str, Any]:

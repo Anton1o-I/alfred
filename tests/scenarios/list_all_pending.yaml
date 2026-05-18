@@ -1,0 +1,59 @@
+# Tasks LIST scenarios — unscoped (no assignee filter).
+#
+# These guard intent-classifier RECALL on novel list phrasings. Today's
+# 05_tasks.yaml already covers a couple of phrasings; here we add wording
+# that historically slipped through to clarify ("what chores", "what's
+# outstanding", "remind me what's pending").
+
+- name: list_what_chores_phrasing
+  kind: tasks
+  email: |
+    What chores do I have?
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+    - id: mow-lawn
+      title: "Mow lawn"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: listed
+    # Unscoped list → generic header, both chores visible.
+    reply_contains: ["Your chores", "trash", "Mow"]
+    reply_excludes: ["Alex's chores", "Sam's chores"]
+
+- name: list_whats_outstanding_phrasing
+  kind: tasks
+  email: |
+    Remind me what's outstanding right now.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+  expect:
+    outcome: listed
+    reply_contains: ["Your chores", "trash"]
+
+- name: list_whats_overdue_phrasing
+  kind: tasks
+  email: |
+    What's overdue?
+  today: "2026-05-17"
+  initial_chores:
+    - id: mow-lawn
+      title: "Mow lawn"
+      assignee: primary
+      recurrence_type: completion
+      recurrence_rule: { frequency: DAILY, interval: 7 }
+      created_at: "2026-05-01 00:00:00"
+  expect:
+    outcome: listed
+    reply_contains: ["Mow"]

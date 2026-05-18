@@ -19,6 +19,22 @@ RecurrenceType = Literal["schedule", "completion", "once"]
 Confidence = Literal["high", "medium", "none"]
 
 
+class TargetReference(BaseModel):
+    """The natural-language phrase the user used to refer to an existing chore.
+
+    Defined here (above IntentClassification) so the router schema can
+    reference it for its optional list_target field without a forward ref.
+    """
+
+    reference: str = Field(
+        description=(
+            "A brief restatement of the chore the user is referring to, in their "
+            "own words. Examples: 'trash', 'the bathrooms', 'taking out the recycling'. "
+            "Leave empty string if the user didn't actually reference a chore."
+        )
+    )
+
+
 class IntentClassification(BaseModel):
     """First-pass router decision — what does the user want to do?"""
 
@@ -32,6 +48,18 @@ class IntentClassification(BaseModel):
             "explicit chore name or single recurrence rule. complex: multiple "
             "chores in one email, ambiguous identification of an existing "
             "chore, or unusual recurrence phrasing. When in doubt, prefer simple."
+        ),
+    )
+    list_target: TargetReference | None = Field(
+        default=None,
+        description=(
+            "When action='list' AND the user scoped the query to a specific "
+            "person ('what does Alex owe?', 'show me Sam's chores', 'what "
+            "household chores are pending?'), capture the assignee phrase here. "
+            "Leave null for unscoped queries ('what chores do I have', 'list "
+            "everything pending'). Use exactly the user's wording in the "
+            "reference field (e.g. 'Alex', 'my spouse', 'household'). Only "
+            "set this for action='list' — leave null otherwise."
         ),
     )
     reasoning: str = Field(default="", description="One short sentence.")
@@ -146,18 +174,6 @@ class DuplicateCheckDecision(BaseModel):
     reasoning: str = Field(
         default="",
         description="One short sentence (shown to the user when we ask for confirmation).",
-    )
-
-
-class TargetReference(BaseModel):
-    """The natural-language phrase the user used to refer to an existing chore."""
-
-    reference: str = Field(
-        description=(
-            "A brief restatement of the chore the user is referring to, in their "
-            "own words. Examples: 'trash', 'the bathrooms', 'taking out the recycling'. "
-            "Leave empty string if the user didn't actually reference a chore."
-        )
     )
 
 

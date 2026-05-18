@@ -1,0 +1,29 @@
+# Tasks LIST scenarios — empty state with and without an assignee scope.
+
+- name: list_empty_unscoped
+  kind: tasks
+  email: |
+    What chores do I have pending?
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: listed
+    reply_contains: ["no chores"]
+
+- name: list_empty_scoped_to_alex
+  kind: tasks
+  email: |
+    What does Alex owe?
+  today: "2026-05-17"
+  # Only Sam has chores → Alex's scoped list is empty. Scoped empty-state
+  # copy should name Alex, not the generic "no chores being tracked".
+  initial_chores:
+    - id: clean-bathrooms
+      title: "Clean bathrooms"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: listed
+    reply_contains: ["Alex"]
+    reply_excludes: ["bathrooms"]

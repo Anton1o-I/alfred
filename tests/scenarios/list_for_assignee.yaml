@@ -1,0 +1,54 @@
+# Tasks LIST scenarios — scoped to a specific assignee (primary).
+#
+# The classifier must (a) pick action='list' on "what does X owe" phrasing
+# and (b) populate list_target with the name. The list node then filters
+# out other people's chores AND household chores ("what does Alex owe"
+# means HIS personal chores, not shared ones).
+
+- name: list_what_does_alex_owe
+  kind: tasks
+  email: |
+    What does Alex owe?
+  today: "2026-05-17"
+  initial_chores:
+    - id: mow-lawn
+      title: "Mow lawn"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+    - id: clean-bathrooms
+      title: "Clean bathrooms"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: listed
+    # Scoped header + only Alex's personal chore visible.
+    reply_contains: ["Alex", "Mow"]
+    reply_excludes: ["trash", "bathrooms"]
+
+- name: list_show_me_alex_chores
+  kind: tasks
+  email: |
+    Show me Alex's chores.
+  today: "2026-05-17"
+  initial_chores:
+    - id: mow-lawn
+      title: "Mow lawn"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+    - id: clean-bathrooms
+      title: "Clean bathrooms"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: listed
+    reply_contains: ["Alex", "Mow"]
+    reply_excludes: ["bathrooms"]
