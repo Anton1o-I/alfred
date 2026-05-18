@@ -571,16 +571,49 @@ async def run_daily_briefing(app: App) -> dict:
     events_html = _render_events_html(events, tz)
     headline = f"TOMORROW · {tomorrow.strftime('%a, %B %-d')}"
 
+    from alfred.notifications.tasks_render import (
+        ShameTierTable,
+        render_chores_html,
+        render_chores_plain,
+    )
+
+    tier_table = ShameTierTable(app.settings.notifications.shame_tiers)
+    split_for_shame: bool = bool(chore_data.get("split_for_shame"))
+    roast_lines = await _generate_chore_roasts(
+        app, chore_data["categorized"]["overdue"], tier_table
+    )
+
+    # Categorized chores for the *regular* briefing: when splitting, peel
+    # tier-2+ overdue rows out so they only appear in the Disappointed mail.
+    if split_for_shame:
+        briefing_categorized = {
+            **chore_data["categorized"],
+            "overdue": chore_data["non_shame_overdue"],
+        }
+    else:
+        briefing_categorized = chore_data["categorized"]
+
+    briefing_has_chores = bool(
+        briefing_categorized["overdue"]
+        or briefing_categorized["due_today"]
+        or briefing_categorized["due_tomorrow"]
+    )
+
     chores_plain: str | None = None
     chores_html: str | None = None
-    if has_chores_to_show:
-        from alfred.notifications.tasks_render import (
-            render_chores_html,
-            render_chores_plain,
+    if briefing_has_chores:
+        chores_plain = render_chores_plain(
+            briefing_categorized,
+            assignee_names,
+            shame_tiers=tier_table,
+            roast_lines=roast_lines,
         )
-
-        chores_plain = render_chores_plain(chore_data["categorized"], assignee_names)
-        chores_html = render_chores_html(chore_data["categorized"], assignee_names)
+        chores_html = render_chores_html(
+            briefing_categorized,
+            assignee_names,
+            shame_tiers=tier_table,
+            roast_lines=roast_lines,
+        )
 
     plain, html = _render_email(
         headline=headline,
@@ -594,6 +627,17 @@ async def run_daily_briefing(app: App) -> dict:
     )
     subject = f"Tomorrow's schedule — {_fmt_short_date(tomorrow)}"
     await _send(app, subject, plain, html, force_user_ids=chore_data["shame_user_ids"])
+
+    if split_for_shame:
+        await _send_shame_email(
+            app,
+            tomorrow=tomorrow,
+            shame_overdue=chore_data["shame_overdue"],
+            assignee_names=assignee_names,
+            tier_table=tier_table,
+            force_user_ids=chore_data["shame_user_ids"],
+            roast_lines=roast_lines,
+        )
     log.info(
         "daily_briefing_sent",
         date=tomorrow.isoformat(),
@@ -614,6 +658,57 @@ async def run_daily_briefing(app: App) -> dict:
     }
 
 
+async def _generate_chore_roasts(
+    app: App,
+    overdue: list[Any],
+    tier_table: Any,
+) -> dict[str, str]:
+    """Build the specialist inputs and call the roaster for shame-tier chores.
+
+    Returns `{chore_id: roast}` for every chore the LLM successfully
+    roasted. Returns `{}` on any failure (the renderers fall back per
+    chore to the static `fallback_label`). Skipped entirely when no
+    overdue chore qualifies for a shame tier (tier ≥ 1).
+    """
+    from alfred.notifications.shame_specialist import (
+        ChoreRoastInput,
+        generate_roasts,
+    )
+    from alfred.notifications.tasks_render import shame_tier
+
+    inputs: list[ChoreRoastInput] = []
+    for s in overdue:
+        if s.chore.assignee == "household":
+            # Household chores skip shame; static label is correct here.
+            continue
+        tier = shame_tier(
+            s.overdue_days,
+            shame_after_days=s.chore.shame_after_days,
+            table=tier_table,
+        )
+        if tier < 1:
+            continue
+        chore_id = getattr(s.chore, "id", None)
+        if not chore_id:
+            continue
+        inputs.append(
+            ChoreRoastInput(
+                chore_id=str(chore_id),
+                title=s.chore.title,
+                assignee=s.chore.assignee,
+                tier=tier,
+                days=s.overdue_days,
+            )
+        )
+    if not inputs:
+        return {}
+    try:
+        return await generate_roasts(inputs, app.litellm_client)
+    except Exception as e:  # noqa: BLE001
+        log.warning("shame_roast_generation_failed", error=str(e))
+        return {}
+
+
 async def _fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict:
     """Pull chore statuses from the tasks agent's store (if registered).
 
@@ -621,11 +716,21 @@ async def _fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict
     force-CC'd because at least one of their chores is past `shame_after_days`.
     Returns empty data when the tasks agent isn't enabled.
     """
-    from alfred.notifications.tasks_render import categorize_statuses, shame_assignees
+    from alfred.notifications.tasks_render import (
+        ShameTierTable,
+        _should_split_for_shame,
+        categorize_statuses,
+        shame_assignees,
+        shame_tier,
+    )
 
     empty = {
         "categorized": {"overdue": [], "due_today": [], "due_tomorrow": [], "later": []},
         "shame_user_ids": [],
+        "statuses": [],
+        "split_for_shame": False,
+        "shame_overdue": [],
+        "non_shame_overdue": [],
     }
     tasks_agent = app.agent_registry.get("tasks")
     if tasks_agent is None:
@@ -637,7 +742,34 @@ async def _fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict
         return empty
     categorized = categorize_statuses(statuses)
     shame_ids = sorted(shame_assignees(statuses))
-    return {"categorized": categorized, "shame_user_ids": shame_ids}
+
+    table = ShameTierTable(app.settings.notifications.shame_tiers)
+    split = _should_split_for_shame(statuses, table)
+    shame_overdue: list[Any] = []
+    non_shame_overdue: list[Any] = []
+    if split:
+        for s in categorized["overdue"]:
+            if s.chore.assignee == "household":
+                non_shame_overdue.append(s)
+                continue
+            tier = shame_tier(
+                s.overdue_days,
+                shame_after_days=s.chore.shame_after_days,
+                table=table,
+            )
+            if tier >= 2:
+                shame_overdue.append(s)
+            else:
+                non_shame_overdue.append(s)
+
+    return {
+        "categorized": categorized,
+        "shame_user_ids": shame_ids,
+        "statuses": statuses,
+        "split_for_shame": split,
+        "shame_overdue": shame_overdue,
+        "non_shame_overdue": non_shame_overdue,
+    }
 
 
 async def run_weekly_preview(app: App) -> dict:
@@ -828,4 +960,105 @@ async def _send(
         from_name=from_name,
         agent_name="calendar",
         force_user_ids=force_user_ids,
+    )
+
+
+async def _send_shame_email(
+    app: App,
+    *,
+    tomorrow: date,
+    shame_overdue: list[Any],
+    assignee_names: dict[str, str],
+    tier_table: Any,
+    force_user_ids: list[str] | None,
+    roast_lines: dict[str, str] | None = None,
+) -> None:
+    """Send the tier-2+ overdue chores as a separate "Disappointed" email.
+
+    Composed and sent in addition to the regular briefing — never as a
+    replacement. Reuses the chore-row renderers with the tier table so
+    the visual treatment matches what users see inside the briefing's
+    chore section, just with a different envelope and persona.
+    """
+    from alfred.notifications.personas import Persona, resolve_persona
+    from alfred.notifications.signature import (
+        append_to_body,
+        append_to_html,
+        render_signature,
+    )
+    from alfred.notifications.tasks_render import (
+        render_chores_html,
+        render_chores_plain,
+    )
+
+    cfg = app.settings.notifications
+    persona_name, persona_tagline = resolve_persona(
+        Persona.TASKS_SHAME, cfg.personas
+    )
+
+    categorized = {
+        "overdue": shame_overdue,
+        "due_today": [],
+        "due_tomorrow": [],
+        "later": [],
+    }
+    chores_plain = render_chores_plain(
+        categorized,
+        assignee_names,
+        shame_tiers=tier_table,
+        roast_lines=roast_lines,
+    )
+    chores_html = render_chores_html(
+        categorized,
+        assignee_names,
+        shame_tiers=tier_table,
+        roast_lines=roast_lines,
+    )
+
+    headline = f"OVERDUE CHORES · {_fmt_short_date(tomorrow)}"
+    intro_plain = (
+        "Several chores have been pending long enough that they need attention "
+        "today. Listed below with how long they've been waiting."
+    )
+    intro_html = _escape(intro_plain)
+
+    body_style = (
+        "margin: 0; padding: 0; background: #f5f5f7; "
+        f"font-family: {_FONT_STACK}; color: #1d1d1f;"
+    )
+    container_style = (
+        "max-width: 560px; margin: 0 auto; padding: 32px 24px; background: #ffffff;"
+    )
+    header_style = (
+        "margin: 0 0 6px; font-size: 14px; font-weight: 600; "
+        "letter-spacing: 0.04em; text-transform: uppercase; color: #b91c1c;"
+    )
+    intro_style = (
+        "margin: 0 0 20px; font-size: 15px; line-height: 1.55; color: #1d1d1f;"
+    )
+    html_parts = [
+        '<!doctype html><html><head><meta charset="utf-8"></head>',
+        f'<body style="{body_style}">',
+        f'<div style="{container_style}">',
+        f'<p style="{header_style}">{headline}</p>',
+        f'<p style="{intro_style}">{intro_html}</p>',
+        chores_html,
+        "</div></body></html>",
+    ]
+    html = "".join(html_parts)
+    plain_parts = [headline, "", intro_plain, "", chores_plain]
+    plain = "\n".join(plain_parts).rstrip() + "\n"
+
+    sig_plain, sig_html = render_signature(persona_name, persona_tagline)
+    plain_final = append_to_body(plain, sig_plain)
+    html_final = append_to_html(html, sig_html)
+
+    subject = f"Overdue chores — {_fmt_short_date(tomorrow)}"
+    await app.notification_service.send_to_family(
+        body=plain_final,
+        subject=subject,
+        html_body=html_final,
+        agent_name="calendar",
+        force_user_ids=force_user_ids,
+        persona_override=Persona.TASKS_SHAME,
     )

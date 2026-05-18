@@ -17,6 +17,35 @@ email_taglines_by_agent:
   calendar: "AI assistant · reply to confirm, correct, or ask for changes"
   tasks: "AI chore tracker · reply to add, complete, list, or update chores"
 
+# Alternate personas — explicit From-name overrides for special-case sends.
+# Keys must match values in `alfred.notifications.personas.Persona`.
+personas:
+  tasks-shame:
+    display_name: "Alfred · Disappointed"
+    tagline: "AI chore tracker · this note covers chores that are overdue"
+
+# Escalating-tone tiers for overdue chores in the daily briefing.
+# Tier 1 = neutral nudge, tier 2 = firm reminder, tier 3 = severe.
+# A chore is eligible for shame tiering only once its overdue_days has
+# crossed its own `shame_after_days` threshold; the tier itself is then
+# selected purely from overdue_days.
+shame_tiers:
+  - tier: 1
+    min_days: 2
+    max_days: 5
+    fallback_label: "{days}d overdue"
+    row_prefix: "·"
+  - tier: 2
+    min_days: 6
+    max_days: 10
+    fallback_label: "{days}d overdue"
+    row_prefix: "!"
+  - tier: 3
+    min_days: 11
+    max_days: null
+    fallback_label: "{days}d overdue"
+    row_prefix: "!!"
+
 # iCloud path: identity comes from env vars (see .env.example).
 icloud_email_env: "ALFRED_ICLOUD_EMAIL"
 icloud_username_env: "ALFRED_ICLOUD_USERNAME"  # primary Apple ID email — used ONLY for CalDAV

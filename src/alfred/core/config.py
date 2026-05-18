@@ -97,6 +97,26 @@ class NotificationConfig(BaseModel):
 
     recipients: list[RecipientConfig] = []
 
+    # Alternate outbound identities (e.g. "tasks-shame" → "Alfred · Disappointed").
+    # Each value carries `display_name` and `tagline`. Resolved by
+    # `alfred.notifications.personas.resolve_persona`.
+    personas: dict[str, dict[str, str]] = {}
+
+    # Tasks-shame escalating-tier copy. Each entry covers a closed range of
+    # overdue days (`min_days` inclusive; `max_days` inclusive or null for
+    # the open-ended top tier) and supplies the rendered strings the
+    # briefing uses. Keeping copy in YAML means tone shifts are a config
+    # change, not a code change.
+    #
+    # Expected keys per entry:
+    #   tier: 1 | 2 | 3
+    #   min_days: int
+    #   max_days: int | null
+    #   fallback_label: short suffix shown on the chore row ("5d overdue")
+    #     used when the LLM roast specialist has no line for the chore
+    #   row_prefix: glyph (·/!/!!) rendered before the label in plain text
+    shame_tiers: list[dict[str, Any]] = []
+
 
 class ScheduledTaskConfig(BaseModel):
     """A scheduled job definition."""

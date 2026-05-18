@@ -10,6 +10,7 @@ from alfred.audit.logger import AuditLogger
 from alfred.core.config import NotificationConfig, RecipientConfig
 from alfred.core.constants import AuditEventType
 from alfred.notifications.models import Notification, NotificationResult
+from alfred.notifications.personas import Persona, resolve_persona
 from alfred.storage.database import Database
 
 log = structlog.get_logger()
@@ -84,6 +85,7 @@ class NotificationService:
         from_name: str | None = None,
         agent_name: str | None = None,
         force_user_ids: list[str] | None = None,
+        persona_override: Persona | None = None,
     ) -> list[NotificationResult]:
         """Send a notification to all family members via their preferred channel.
 
@@ -95,7 +97,18 @@ class NotificationService:
         users — they receive the message even if they'd normally be skipped.
         Used by the tasks-shame routing to CC a spouse who isn't otherwise
         subscribed to the daily briefing.
+
+        `persona_override` swaps the From-name with the persona's display
+        name (resolved from `NotificationConfig.personas`). Passed
+        explicitly via the `Persona` enum so call sites can't drift on
+        string spelling. When set, it takes precedence over `from_name`.
         """
+        if persona_override is not None:
+            override_name, _override_tagline = resolve_persona(
+                persona_override, self._config.personas
+            )
+            if override_name:
+                from_name = override_name
         metadata = {"from_name": from_name} if from_name else {}
         forced = set(force_user_ids or [])
         results = []
