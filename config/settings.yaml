@@ -37,6 +37,10 @@ inbox:
     - "${ALFRED_ALLOWED_SENDER_1}"
     - "${ALFRED_ALLOWED_SENDER_2}"
 
+# NOTE: APScheduler's CronTrigger.from_crontab does NOT use Unix-cron
+# day-of-week semantics. Numeric dow is 0=Mon..6=Sun (NOT 0=Sun). Always
+# use named days (mon, tue, wed, thu, fri, sat, sun) for the dow field
+# to keep this readable and bug-free.
 scheduled_tasks:
   - name: "inbox_poll"
     cron: "* * * * *"  # Every minute — keeps perceived latency under ~30s
@@ -51,14 +55,14 @@ scheduled_tasks:
     enabled: true
 
   - name: "weekly_preview"
-    cron: "0 18 * * 0"  # Sunday 6:00 PM
+    cron: "0 18 * * sun"  # Sunday 6:00 PM
     agent_name: "briefing"
     message: "weekly"
     enabled: true
 
 
   - name: "weekly_calendar_digest"
-    cron: "0 18 * * 0"  # Sunday 6:00 PM
+    cron: "0 18 * * sun"  # Sunday 6:00 PM
     agent_name: "calendar"
     message: "Generate the weekly calendar digest for this upcoming week"
     enabled: false
@@ -76,7 +80,7 @@ scheduled_tasks:
     enabled: false
 
   - name: "weekly_research_curator"
-    cron: "0 4 * * 1"  # Monday 4:00 AM — ready for the Monday morning read
+    cron: "0 4 * * mon"  # Monday 4:00 AM — ready for the Monday morning read
     agent_name: "curator"
     message: "Generate the weekly research curator digest"
     enabled: true
