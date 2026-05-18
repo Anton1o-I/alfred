@@ -33,6 +33,11 @@ from alfred.agents.calendar.briefing import (
     analyze_day,
 )
 from alfred.agents.tasks.store import Chore, ChoreStatus
+from alfred.notifications.signature import (
+    append_to_body,
+    append_to_html,
+    render_signature,
+)
 from alfred.notifications.tasks_render import (
     categorize_statuses,
     render_chores_html,
@@ -245,6 +250,17 @@ async def _render_one(
         chores_section_html=chores_html,
         lead_section=narrative.lead_section,
     )
+
+    # Append signature so the sim output mirrors what actually ships to email.
+    # Mirrors the persona+tagline pair the real send path pulls from
+    # NotificationConfig.email_*_by_agent for the "calendar" agent. Hardcoding
+    # representative values is fine for the sim — we just need to validate
+    # the rendered shape, not the per-deployment text.
+    sig_plain, sig_html = render_signature(
+        persona="Alfred", tagline="Family schedule & chore briefings"
+    )
+    plain = append_to_body(plain, sig_plain)
+    html = append_to_html(html, sig_html)
     return plain, html, narrative
 
 

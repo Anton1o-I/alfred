@@ -4,6 +4,39 @@ Tracked work items not yet scheduled. Newest at top.
 
 ---
 
+## Gmail mobile still trims the daily briefing email
+
+**Status:** Accepted limitation for now. Web Gmail + iOS Mail render
+the full email; only Gmail's mobile client shows a "Show trimmed
+content" chip that hides the sections + signature.
+
+**What we already removed (didn't fix the mobile trim):**
+- `border-top: 1px solid #e5e5ea` on HTML section headers + signature
+  container.
+- Leading `—` em-dash on the plain-text signature.
+- `──────────────────────────────` (30 box-drawing chars) divider lines
+  under plain-text section headers.
+
+**What might still be triggering Gmail mobile's heuristic:**
+- Plain-text section headers are uppercase + blank-line separated,
+  which still resembles signature-block formatting to Gmail's parser.
+- The signature line `AI assistant · reply to confirm, correct, or ask
+  for changes` reads like a stock email footer.
+- Tabular-numerics + repeated row layout in chore/event sections may
+  match Gmail's "quoted reply / signature card" pattern detection.
+
+**If we revisit:**
+- Try sending HTML-only (drop the plain-text part) and see whether
+  Gmail's heuristic still triggers without the secondary signal.
+- Try shorter / different signature text — drop "reply to confirm…"
+  tagline.
+- Consider switching SMTP relay (currently iCloud) since deliverability
+  reputation can affect Gmail's mobile rendering choices.
+- Worst case: accept it. User sees full email on web Gmail and iOS
+  Mail; mobile-Gmail users tap "Show trimmed content" once.
+
+---
+
 ## Guardrails so the Anthropic-Sonnet 429 cascade can't recur
 
 **Status:** The original incident is already mitigated — but no test

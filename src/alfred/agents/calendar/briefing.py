@@ -343,12 +343,16 @@ def _render_email(
     has_chores = bool(chores_section_plain or chores_section_html)
     chores_lead = lead_section == "chores" and has_chores
 
-    # Plain — section order driven by lead_section.
+    # Plain — section order driven by lead_section. No horizontal-rule
+    # dividers under headers: Gmail mobile's "Show trimmed content"
+    # heuristic detects any line of repeated dash-like characters in the
+    # plain part as a signature/quote boundary and collapses everything
+    # below. We use uppercase-styled headers and blank-line spacing to
+    # carry the visual hierarchy in plain text instead.
     plain_parts = [
         narrative.greeting.strip(),
         "",
         narrative.summary.strip(),
-        "",
     ]
     sections_plain: list[tuple[str, str]] = []
     if chores_lead:
@@ -359,16 +363,15 @@ def _render_email(
         sections_plain.append(("Events", events_section_plain))
         if chores_section_plain:
             sections_plain.append(("Chores", chores_section_plain))
-    for i, (title, body) in enumerate(sections_plain):
-        if i > 0:
-            plain_parts.append("")
-        plain_parts.append(title)
-        plain_parts.append("─" * 30)
+    for title, body in sections_plain:
+        plain_parts.append("")
+        plain_parts.append(title.upper())
+        plain_parts.append("")
         plain_parts.append(body)
     if observations:
         plain_parts.append("")
-        plain_parts.append("Observations")
-        plain_parts.append("─" * 30)
+        plain_parts.append("OBSERVATIONS")
+        plain_parts.append("")
         for obs in observations:
             plain_parts.append(f"• {obs}")
     plain = "\n".join(plain_parts).rstrip() + "\n"
@@ -392,9 +395,13 @@ def _render_email(
     summary_style = (
         "margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #1d1d1f;"
     )
+    # NOTE: no border-top divider. Gmail mobile's "Show trimmed content"
+    # heuristic treats horizontal-rule patterns as a signature/quote
+    # boundary and collapses everything below — losing the Events / Chores
+    # / Observations sections entirely. Use generous margin + small-caps
+    # styling for visual separation instead.
     section_h_style = (
-        "margin: 24px 0 12px; padding-top: 16px; "
-        "border-top: 1px solid #e5e5ea; font-size: 11px; font-weight: 600; "
+        "margin: 32px 0 12px; font-size: 11px; font-weight: 600; "
         "letter-spacing: 0.08em; text-transform: uppercase; color: #6e6e73;"
     )
     obs_list_style = "margin: 0; padding: 0 0 0 18px; font-size: 14px; line-height: 1.55;"

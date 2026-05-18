@@ -20,7 +20,12 @@ def render_signature(persona: str, tagline: str) -> tuple[str, str]:
     if not persona and not tagline:
         return "", ""
 
-    plain_lines = ["—"]
+    # NOTE: no leading '—' or '--' line and no border-top divider on the
+    # HTML side. Both are Gmail-mobile signature-detection triggers that
+    # cause the "Show trimmed content" heuristic to collapse the body
+    # above. We rely on extra top margin + smaller, dim text for the
+    # visual signature break instead.
+    plain_lines: list[str] = []
     if persona:
         plain_lines.append(persona)
     if tagline:
@@ -28,8 +33,7 @@ def render_signature(persona: str, tagline: str) -> tuple[str, str]:
     plain = "\n".join(plain_lines)
 
     container = (
-        "margin: 32px 0 0; padding-top: 12px; "
-        "border-top: 1px solid #e5e5ea; "
+        "margin: 40px 0 0; "
         f"font-family: {_FONT_STACK}; "
         "font-size: 12px; line-height: 1.45; color: #86868b;"
     )
