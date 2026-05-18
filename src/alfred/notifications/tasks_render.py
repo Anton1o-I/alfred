@@ -1,11 +1,18 @@
-"""Render chore status sections for the unified daily briefing.
+"""Rendering primitives for the tasks agent's outbound mail.
 
-Produces plain-text and HTML blocks. The briefing composes these alongside
-the calendar event sections so users get one morning view of both.
+Two surfaces live here:
+
+1. Daily-briefing chore section (`categorize_statuses`, `render_chores_*`,
+   `shame_assignees`) — composed alongside the calendar event sections.
+2. Per-reply card (`ReplyPayload` + `render_reply_*`) — the response that
+   goes back to the user after a create/complete/delete/update/list/etc.
+   Uses a definition-table layout for actions with structured details
+   and a plain prose card for clarifications and confirmations.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
@@ -140,6 +147,123 @@ def render_chores_html(categorized: dict[str, list[Any]]) -> str:
                 f' <span style="{assignee_style}">· {escape(s.chore.assignee)}</span>'
                 "</div>"
             )
+    return "".join(parts)
+
+
+# ── Per-reply payload + renderer ────────────────────────────────────────────
+
+
+@dataclass
+class ReplyPayload:
+    """Structured content for a single agent reply.
+
+    Renderers (`render_reply_plain` / `render_reply_html`) consume this and
+    produce the strings the inbox poller actually sends. Keeping the
+    structure separate from the rendering means the workflow handlers stay
+    rendering-agnostic and the layout can evolve without touching them.
+
+    Fields:
+      header: short banner (HTML title + plain-text heading). Required.
+      title:  primary subject of the action — typically the chore title.
+              Rendered as a prominent line above the fields table. Optional.
+      fields: ordered (label, value) pairs rendered as a definition table.
+              Empty list = no table.
+      body:   free-form prose below the table (clarifications, asks).
+              Used when the reply isn't structured enough for fields.
+      footer: optional small-text footnote (e.g. "id: trash · reply 'undo'").
+    """
+
+    header: str
+    title: str | None = None
+    fields: list[tuple[str, str]] = field(default_factory=list)
+    body: str | None = None
+    footer: str | None = None
+
+
+def render_reply_plain(payload: ReplyPayload) -> str:
+    """Render a ReplyPayload as plain text suitable for the email body."""
+    lines: list[str] = []
+    lines.append(payload.header)
+    lines.append("─" * max(len(payload.header), 14))
+    lines.append("")
+
+    if payload.title:
+        lines.append(payload.title)
+        lines.append("")
+
+    if payload.fields:
+        label_width = max(len(label) for label, _ in payload.fields)
+        for label, value in payload.fields:
+            lines.append(f"  {label:<{label_width}}    {value}")
+        lines.append("")
+
+    if payload.body:
+        lines.append(payload.body.strip())
+        lines.append("")
+
+    if payload.footer:
+        lines.append(payload.footer)
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+_REPLY_BODY_STYLE = (
+    "margin: 0; padding: 0; background: #f5f5f7; "
+    f"font-family: {_FONT_STACK}; color: #1d1d1f;"
+)
+_REPLY_CONTAINER_STYLE = (
+    "max-width: 560px; margin: 0 auto; padding: 32px 24px; background: #ffffff;"
+)
+_REPLY_HEADER_STYLE = (
+    "margin: 0 0 20px; font-size: 14px; font-weight: 600; "
+    "letter-spacing: 0.04em; text-transform: uppercase; color: #34a853;"
+)
+_REPLY_TITLE_STYLE = (
+    "margin: 0 0 20px; font-size: 22px; font-weight: 600; "
+    "letter-spacing: -0.01em; color: #111;"
+)
+_REPLY_TABLE_STYLE = "width: 100%; border-collapse: collapse; margin: 0 0 16px;"
+_REPLY_LABEL_STYLE = (
+    "padding: 8px 16px 8px 0; vertical-align: top; font-size: 13px; "
+    "color: #86868b; font-weight: 500; white-space: nowrap;"
+)
+_REPLY_VALUE_STYLE = (
+    "padding: 8px 0; vertical-align: top; font-size: 15px; color: #1d1d1f;"
+)
+_REPLY_BODY_TEXT_STYLE = (
+    "font-size: 15px; line-height: 1.55; color: #1d1d1f; margin: 0 0 16px;"
+)
+_REPLY_FOOTER_STYLE = (
+    "font-size: 12px; color: #86868b; margin: 12px 0 0;"
+)
+
+
+def render_reply_html(payload: ReplyPayload) -> str:
+    """Render a ReplyPayload as inline-styled HTML for the email body."""
+    parts: list[str] = [
+        '<!doctype html><html><head><meta charset="utf-8"></head>',
+        f'<body style="{_REPLY_BODY_STYLE}">',
+        f'<div style="{_REPLY_CONTAINER_STYLE}">',
+        f'<p style="{_REPLY_HEADER_STYLE}">{escape(payload.header)}</p>',
+    ]
+    if payload.title:
+        parts.append(f'<h1 style="{_REPLY_TITLE_STYLE}">{escape(payload.title)}</h1>')
+    if payload.fields:
+        parts.append(f'<table style="{_REPLY_TABLE_STYLE}">')
+        for label, value in payload.fields:
+            parts.append(
+                "<tr>"
+                f'<td style="{_REPLY_LABEL_STYLE}">{escape(label)}</td>'
+                f'<td style="{_REPLY_VALUE_STYLE}">{escape(value)}</td>'
+                "</tr>"
+            )
+        parts.append("</table>")
+    if payload.body:
+        body_html = escape(payload.body.strip()).replace("\n", "<br>")
+        parts.append(f'<p style="{_REPLY_BODY_TEXT_STYLE}">{body_html}</p>')
+    if payload.footer:
+        parts.append(f'<p style="{_REPLY_FOOTER_STYLE}">{escape(payload.footer)}</p>')
+    parts.append("</div></body></html>")
     return "".join(parts)
 
 

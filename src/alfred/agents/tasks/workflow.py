@@ -1,28 +1,50 @@
-"""Tasks workflow — LangGraph state machine with specialist nodes.
+"""Tasks workflow — LangGraph state machine for chore management.
 
-Mirrors the calendar workflow shape: pure-code nodes for orchestration,
-typed Pydantic AI specialists for the few steps that need an LLM
-(intent classification, chore parsing, semantic duplicate detection).
+Graph topology and per-node closures live here. Everything else — Pydantic
+schemas, prompt strings, deterministic helpers, LLM specialists, reply
+rendering — lives in sibling modules:
 
-Phase 2 scope: classify_intent + create branch (with duplicate detection).
-Phase 3 will add complete / list / delete / update branches; for now those
-short-circuit to "unsupported".
+  schemas.py      typed outputs of LLM specialists
+  prompts.py      prompt templates + format helpers
+  formatting.py   pure-code helpers (slug, title normalize, shape match…)
+  specialists.py  Specialist class encapsulating local/cloud + token bookkeeping
+  outcomes.py     Outcome StrEnum — single source of truth for outcome strings
+  replies.py      dispatch-table reply builder + assignee humanization
 """
 
 from __future__ import annotations
 
-import re
+from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 from zoneinfo import ZoneInfo
 
 import structlog
 from langgraph.graph import END, StateGraph
 from opentelemetry import trace
-from pydantic import BaseModel, Field
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
+
+from alfred.agents.tasks.formatting import (
+    format_recurrence_human,
+    normalize_shape,
+    normalize_title,
+    shape_reason,
+    shape_verdict,
+    slugify,
+)
+from alfred.agents.tasks.outcomes import Outcome
+from alfred.agents.tasks.prompts import (
+    DEDUP_PROMPT,
+    INTENT_PROMPT,
+    PARSE_PROMPT,
+    TARGET_MATCH_PROMPT,
+    TARGET_PARSE_PROMPT,
+    UPDATE_PARSE_PROMPT,
+    format_existing_block,
+    name_mapping_block,
+)
+from alfred.agents.tasks.replies import build_payload, resolve_outcome
+from alfred.agents.tasks.specialists import SpecialistRegistry
+from alfred.notifications.tasks_render import render_reply_html, render_reply_plain
 
 if TYPE_CHECKING:
     from alfred.agents.tasks.store import ChoreStore
@@ -33,301 +55,29 @@ tracer = trace.get_tracer("alfred.tasks.workflow")
 
 _OI_SPAN_KIND = "openinference.span.kind"
 
-def _norm_shape(s: str | None) -> str | None:
-    """Lowercase + strip shape fields for deterministic comparison."""
-    if not s:
-        return None
-    out = s.strip().lower()
-    return out or None
 
-
-def _shape_verdict(
-    new_obj: str | None,
-    new_qual: str | None,
-    ex_obj: str | None,
-    ex_qual: str | None,
-) -> str:
-    """Pure-code dedup comparison. Returns 'high' | 'medium' | 'none'.
-
-    Truth table (after _norm_shape):
-      different object               → none
-      same object, both qualifiers, same → high
-      same object, both qualifiers, diff → none
-      same object, one qualified, one not → medium
-      same object, neither qualified → high
-    """
-    if not new_obj or not ex_obj:
-        return "none"
-    if new_obj != ex_obj:
-        return "none"
-    if new_qual and ex_qual:
-        return "high" if new_qual == ex_qual else "none"
-    if new_qual or ex_qual:
-        return "medium"
-    return "high"
-
-
-def _shape_reason(
-    new_title: str,
-    ex_title: str,
-    new_obj: str | None,
-    new_qual: str | None,
-    ex_obj: str | None,
-    ex_qual: str | None,
-    verdict: str,
-) -> str:
-    """One-sentence explanation for the user/log."""
-    if verdict == "high":
-        return f"'{new_title}' is the same chore as '{ex_title}' (same target)."
-    if verdict == "medium":
-        unq = new_title if not new_qual else ex_title
-        q = ex_title if not new_qual else new_title
-        return (
-            f"'{unq}' might be the same chore as '{q}' — one of them is more "
-            "specific. Reply to confirm or split them apart."
-        )
-    return f"'{new_title}' and '{ex_title}' target different things."
-
-
-def _slugify(s: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
-    return slug or "chore"
-
-
-def _normalize_title(s: str) -> str:
-    """Canonicalize a chore title so dedup compares apples to apples.
-
-    Rules:
-    - Strip leading/trailing whitespace and trailing punctuation.
-    - Drop articles ('the', 'a', 'an') that appear AFTER the first word,
-      so 'Take out the trash' → 'Take out trash' and 'Clean the kitchen' →
-      'Clean kitchen'. Articles in the leading position are left alone
-      (rare in imperatives, but conservative).
-    - Capitalize the first letter; leave the rest of the casing intact so
-      proper nouns ('Amazon', 'UPS') and the LLM's chosen casing survive.
-    """
-    if not s:
-        return s
-    cleaned = s.strip().rstrip(".!?,;:")
-    parts = cleaned.split()
-    if len(parts) > 1:
-        filtered = [parts[0]] + [w for w in parts[1:] if w.lower() not in {"the", "a", "an"}]
-        cleaned = " ".join(filtered)
-    if cleaned:
-        cleaned = cleaned[0].upper() + cleaned[1:]
-    return cleaned
-
-
-def _traced_node(name: str, fn):
-    async def wrapper(state):  # type: ignore[no-untyped-def]
-        with tracer.start_as_current_span(f"tasks.{name}") as span:
-            span.set_attribute(_OI_SPAN_KIND, "CHAIN")
-            span.set_attribute("alfred.node", name)
-            action = state.get("action") if isinstance(state, dict) else None
-            if action:
-                span.set_attribute("alfred.action", action)
-            result = await fn(state)
-            if isinstance(result, dict):
-                outcome = result.get("outcome")
-                if outcome:
-                    span.set_attribute("alfred.outcome", outcome)
-            return result
-
-    wrapper.__name__ = getattr(fn, "__name__", name)
-    return wrapper
-
-
-# ── Typed schemas the LLM specialists produce ─────────────────────────────
-
-
-class IntentClassification(BaseModel):
-    """What the user wants to do with their chore list."""
-
-    action: Literal["create", "complete", "list", "delete", "update", "clarify"] = (
-        Field(description="What the user wants to do.")
-    )
-    complexity: Literal["simple", "complex"] = Field(
-        default="simple",
-        description=(
-            "How hard the request is to reason about. simple: one action, "
-            "explicit chore name or single recurrence rule. complex: multiple "
-            "chores in one email, ambiguous identification of an existing "
-            "chore, or unusual recurrence phrasing. When in doubt, prefer simple."
-        ),
-    )
-    reasoning: str = Field(default="", description="One short sentence.")
-
-
-class ChoreRecurrence(BaseModel):
-    """How the chore repeats. Parallels the calendar RecurrenceRule shape."""
-
-    frequency: Literal["DAILY", "WEEKLY", "MONTHLY", "YEARLY"] = Field(
-        description="How often the chore repeats."
-    )
-    interval: int = Field(default=1, description="Repeat every N (e.g., 2 = every other).")
-    byday: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Days of the week for weekly patterns. Two-letter codes: "
-            "MO TU WE TH FR SA SU."
-        ),
-    )
-
-
-class ChoreDraft(BaseModel):
-    """Parsed chore from the user's message."""
-
-    id: str | None = Field(
-        default=None,
-        description=(
-            "Optional short stable id the user gave (e.g. 'trash', 'bathrooms'). "
-            "Leave null if the user didn't name one — the system will slugify the title."
-        ),
-    )
-    title: str | None = Field(
-        default=None,
-        description=(
-            "Concise chore name. Examples: 'Take out trash', 'Clean bathrooms'. "
-            "Leave null if the user did not actually describe a chore."
-        ),
-    )
-    description: str | None = None
-    assignee: Literal["household", "primary", "secondary"] | None = Field(
-        default=None,
-        description=(
-            "Who is responsible. 'household' if either spouse can do it; "
-            "'primary' for the message owner; 'secondary' for the other spouse. "
-            "Leave null if the user didn't say — the system will default to household."
-        ),
-    )
-    recurrence_type: Literal["schedule", "completion", "once"] | None = Field(
-        default=None,
-        description=(
-            "'schedule' = anchored to calendar dates ('every Tuesday'). "
-            "'completion' = anchored to last completion ('every 7 days after I do it'). "
-            "'once' = a single one-time task with a specific due date. "
-            "Leave null if the user didn't specify and the system will infer "
-            "(once if due_date_iso is set, else schedule)."
-        ),
-    )
-    recurrence: ChoreRecurrence | None = Field(
-        default=None,
-        description=(
-            "Required for recurring chores. Leave null for one-time tasks "
-            "(when recurrence_type='once' or the user gave a single date)."
-        ),
-    )
-    due_date_iso: str | None = Field(
-        default=None,
-        description=(
-            "For one-time tasks only. ISO date (YYYY-MM-DD) when the task is due. "
-            "Resolve relative phrases like 'next Friday' or 'tomorrow' using "
-            "today's date provided in the prompt. Leave null for recurring chores."
-        ),
-    )
-    shame_after_days: int | None = Field(
-        default=None,
-        description="Days overdue before public shame kicks in. Defaults to 3.",
-    )
-    object: str | None = Field(
-        default=None,
-        description=(
-            "The single noun the chore acts on, lowercase, singular. "
-            "Examples: 'trash' for 'Take out trash', 'bathroom' for 'Clean main bathroom', "
-            "'lawn' for 'Mow lawn', 'plants' for 'Water plants'. Leave null if the "
-            "title isn't a clean verb-noun shape."
-        ),
-    )
-    qualifier: str | None = Field(
-        default=None,
-        description=(
-            "Modifier that distinguishes WHICH instance of the object. Lowercase. "
-            "Examples: 'main' for 'Clean main bathroom', 'kitchen' for 'Wipe kitchen "
-            "counters', 'front' for 'Sweep front porch'. Leave null when the chore "
-            "doesn't single out one instance (e.g. 'Take out trash' has no qualifier)."
-        ),
-    )
-
-
-class DuplicateCheckDecision(BaseModel):
-    """Output of the semantic-dedup specialist."""
-
-    confidence: Literal["high", "medium", "none"] = Field(
-        description=(
-            "high: this is plainly the same chore as an existing one. "
-            "medium: likely overlap, worth asking the user to confirm. "
-            "none: no meaningful overlap — safe to create."
-        )
-    )
-    existing_chore_id: str | None = Field(
-        default=None,
-        description="The matched existing chore's id, or null if confidence is 'none'.",
-    )
-    reasoning: str = Field(
-        default="",
-        description="One short sentence (shown to the user when we ask for confirmation).",
-    )
-
-
-class TargetReference(BaseModel):
-    """The natural-language phrase the user used to refer to an existing chore."""
-
-    reference: str = Field(
-        description=(
-            "A brief restatement of the chore the user is referring to, in their "
-            "own words. Examples: 'trash', 'the bathrooms', 'taking out the recycling'. "
-            "Leave empty string if the user didn't actually reference a chore."
-        )
-    )
-
-
-class TargetMatch(BaseModel):
-    """Which active chore the user means."""
-
-    confidence: Literal["high", "medium", "none"] = Field(
-        description=(
-            "high: clearly the right chore — proceed. "
-            "medium: likely match but worth confirming first. "
-            "none: no candidate plausibly matches."
-        )
-    )
-    chore_id: str | None = Field(
-        default=None,
-        description="The matched chore's id, or null if confidence is 'none'.",
-    )
-    reasoning: str = Field(
-        default="",
-        description="One short sentence explaining the match (shown to the user).",
-    )
-
-
-class ChoreUpdateDraft(BaseModel):
-    """What to change on an existing chore."""
-
-    target_reference: str = Field(
-        description="Brief restatement of which chore the user wants to change."
-    )
-    new_title: str | None = None
-    new_assignee: Literal["household", "primary", "secondary"] | None = None
-    new_recurrence_type: Literal["schedule", "completion"] | None = None
-    new_recurrence: ChoreRecurrence | None = None
-    new_shame_after_days: int | None = None
-
-
-# ── Graph state ───────────────────────────────────────────────────────────
+# ── Graph state ─────────────────────────────────────────────────────────────
 
 
 class TasksState(TypedDict, total=False):
+    """LangGraph state container.
+
+    All keys are optional (`total=False`) — node functions return only
+    the slices they touch and LangGraph merges them. Anything not declared
+    here is silently dropped by the state machine, so every key a node
+    returns MUST appear in this TypedDict.
+    """
+
     # Inputs
     email_body: str
 
-    # Date / chore context
+    # Date / chore context (filled by enrich_context)
     today_iso: str
     today_day_of_week: str
     timezone_name: str
     active_chores: list[dict]
 
-    # Classification
+    # Classification (filled by classify_intent)
     action: str
     complexity: str
 
@@ -348,323 +98,51 @@ class TasksState(TypedDict, total=False):
     # List branch
     pending_summary: list[dict]
 
-    # Outcome
+    # Outcome (one of the Outcome enum values)
     outcome: str
     error_message: str
 
-    # Reply
+    # Reply text (filled by build_reply)
     reply_plain: str
     reply_html: str
 
-    # Usage
+    # Cumulative token usage
     input_tokens: int
     output_tokens: int
 
 
-# ── Prompts ──────────────────────────────────────────────────────────────
+# ── Tracing ─────────────────────────────────────────────────────────────────
 
 
-_INTENT_PROMPT = (
-    "Classify the user's email into one of these chore-tracker actions:\n"
-    "- create: user wants to add a new recurring chore\n"
-    "- complete: user is marking a chore done\n"
-    "- list: user wants to see what's pending/overdue\n"
-    "- delete: user wants to remove a chore from tracking\n"
-    "- update: user wants to change an existing chore (assignee, recurrence, etc.)\n"
-    "- clarify: the request is unclear or out of scope\n"
-    "\n"
-    "Email body:\n"
-    "{email_body}"
-)
+def _traced_node(
+    name: str,
+    fn: Callable[[TasksState], Any],
+) -> Callable[[TasksState], Any]:
+    """Wrap a node coroutine so each invocation emits a CHAIN child span.
 
-
-_PARSE_PROMPT = (
-    "Extract the chore the user wants to add.\n"
-    "\n"
-    "Today is {today_day_of_week}, {today_iso} ({timezone_name}).\n"
-    "\n"
-    "Rules:\n"
-    "- title: short imperative name, in this exact CANONICAL FORMAT:\n"
-    "    • Start with the verb in imperative form ('Take out', 'Clean', "
-    "      'Water', 'Replace').\n"
-    "    • Sentence case: capitalize only the first word; lowercase the "
-    "      rest UNLESS it's a proper noun ('Amazon', 'UPS') or an acronym "
-    "      ('HVAC').\n"
-    "    • Singular, no leading or interior articles. Write 'Take out "
-    "      trash' NOT 'Take out the trash'. Write 'Clean kitchen "
-    "      countertops' NOT 'Clean the Kitchen Countertops'.\n"
-    "    • Be SPECIFIC when the user names a particular target — use the "
-    "      qualifier inline ('Clean main bathroom', 'Clean hallway "
-    "      bathroom', NOT just 'Clean bathroom').\n"
-    "    • No scheduling phrases ('every Tuesday') — those go in recurrence.\n"
-    "  Good examples: 'Take out trash', 'Clean main bathroom', 'Water "
-    "  plants', 'Mow lawn', 'Pick up dry cleaning'.\n"
-    "  Bad examples: 'Take out the trash', 'clean downstairs bathroom', "
-    "  'Clean Kitchen Countertops', 'TRASH'.\n"
-    "- assignee: 'household' (default) if either spouse can do it. Use "
-    "  'primary' or 'secondary' when the user names a specific person — "
-    "  resolve the name using the mapping below.\n"
-    "{name_mapping_block}"
-    "- recurrence_type:\n"
-    "    'schedule' when anchored to days ('every Tuesday', 'weekly');\n"
-    "    'completion' when anchored to elapsed time since last done "
-    "      ('every 7 days', 'once a week after I do it');\n"
-    "    'once' when this is a one-time task with a specific date "
-    "      ('pick up the package on Friday', 'call the plumber tomorrow').\n"
-    "  Default to 'schedule' when unsure for recurring; default to 'once' "
-    "  when a single specific date is given.\n"
-    "- recurrence.frequency: DAILY/WEEKLY/MONTHLY/YEARLY (only for recurring).\n"
-    "- recurrence.interval: how many of those frequency units between runs. "
-    "  Default 1. CRITICAL: when the user says 'every N <unit>', interval=N.\n"
-    "    'every 2 days' → frequency=DAILY, interval=2\n"
-    "    'every 3 weeks' → frequency=WEEKLY, interval=3\n"
-    "    'every other Saturday' → frequency=WEEKLY, interval=2, byday=[SA]\n"
-    "    'every 6 months' → frequency=MONTHLY, interval=6\n"
-    "    'weekly' / 'every week' → frequency=WEEKLY, interval=1\n"
-    "  Do NOT collapse 'every 2 days' to interval=1 — the number is load-bearing.\n"
-    "- recurrence.byday: two-letter codes for weekly day-of-week patterns "
-    "  (MO TU WE TH FR SA SU). Leave empty for non-weekly or unspecified.\n"
-    "- due_date_iso: ISO date (YYYY-MM-DD) for one-time tasks. Resolve "
-    "  relative phrases ('next Friday', 'tomorrow', 'this Saturday') using "
-    "  today's date above.\n"
-    "- shame_after_days: only set if the user explicitly says so.\n"
-    "- object: the single noun the chore acts on. Lowercase, singular. "
-    "  This is the THING being acted on, not the verb.\n"
-    "    'Take out trash' → object='trash'\n"
-    "    'Clean main bathroom' → object='bathroom'\n"
-    "    'Clean hallway bathroom' → object='bathroom'\n"
-    "    'Wipe kitchen counters' → object='counters'\n"
-    "    'Mow lawn' → object='lawn'\n"
-    "    'Water plants' → object='plants'\n"
-    "    'Pick up dry cleaning' → object='dry cleaning'\n"
-    "  Leave null only if the title doesn't have a clean verb-noun shape.\n"
-    "- qualifier: the modifier that distinguishes WHICH instance of the "
-    "  object. Lowercase. Leave null when there's no distinguishing modifier.\n"
-    "    'Take out trash' → qualifier=null\n"
-    "    'Clean main bathroom' → qualifier='main'\n"
-    "    'Clean hallway bathroom' → qualifier='hallway'\n"
-    "    'Clean kids bathroom' → qualifier='kids'\n"
-    "    'Wipe kitchen counters' → qualifier='kitchen'\n"
-    "    'Sweep front porch' → qualifier='front'\n"
-    "    'Mow lawn' → qualifier=null\n"
-    "  CRITICAL: when the user names a SPECIFIC instance (main/hallway/"
-    "  master/kids/front/back/upstairs/downstairs/kitchen), put it here. "
-    "  Two chores with different qualifiers are different chores even if "
-    "  they share an object.\n"
-    "\n"
-    "Leave fields null when the user didn't say. Do not invent values.\n"
-    "If the user did not describe a chore at all (e.g. just said 'hi'), "
-    "leave title null.\n"
-    "\n"
-    "Email body:\n"
-    "{email_body}"
-)
-
-
-_DEDUP_PROMPT = (
-    "Decide whether the proposed new chore is already covered by one of the "
-    "existing active chores.\n"
-    "\n"
-    "Proposed new chore:\n"
-    "  title: {new_title}\n"
-    "  recurrence: {new_recurrence}\n"
-    "  assignee: {new_assignee}\n"
-    "\n"
-    "Existing active chores:\n"
-    "{existing_block}\n"
-    "\n"
-    "Confidence rubric:\n"
-    "- high: same underlying activity on the same target. Synonyms or "
-    "paraphrases of one already-tracked chore (e.g. 'take the trash out' "
-    "vs 'Take out trash'; 'wipe down the main bathroom' vs 'Clean the "
-    "main bathroom').\n"
-    "- medium: meaningful overlap and you genuinely cannot tell if they are "
-    "the same — ask the user.\n"
-    "- none: distinct chores. THIS IS THE DEFAULT when in doubt. Examples "
-    "that are NOT duplicates:\n"
-    "  * Different rooms or fixtures: 'main bathroom' vs 'hallway bathroom' "
-    "    vs 'kids' bathroom' vs 'master bathroom' — each room is its own "
-    "    chore even though all involve cleaning a bathroom.\n"
-    "  * Different scope of the same room: 'wipe down kitchen counters' "
-    "    (daily) vs 'deep clean the kitchen' (weekly) — different scope, "
-    "    different cadence, different chores.\n"
-    "  * Different activities on the same target: 'mow the lawn' vs "
-    "    'weed the lawn' — same target, different work.\n"
-    "\n"
-    "Rule of thumb: if the chores refer to physically different objects, "
-    "rooms, or fixtures, they are NOT duplicates regardless of how similar "
-    "the wording sounds. Only flag duplicates when the underlying work is "
-    "the same on the same target.\n"
-    "\n"
-    "Quick test: strip the leading verb. If each remaining title has at "
-    "least one distinctive word the other doesn't (e.g. 'main' vs "
-    "'hallway', 'counters' vs nothing-specific), they're DIFFERENT chores.\n"
-    "\n"
-    "Reasoning should be one short sentence — it gets shown to the user."
-)
-
-
-_TARGET_PARSE_PROMPT = (
-    "Extract which existing chore the user is referring to.\n"
-    "\n"
-    "Action context: {action}  (complete = marking done; delete = removing from "
-    "tracking; update = changing details).\n"
-    "\n"
-    "Active chores currently being tracked:\n"
-    "{existing_block}\n"
-    "\n"
-    "Return a brief restatement of the chore the user references, in their own "
-    "words (e.g. 'the trash', 'taking out recycling', 'bathrooms'). Leave the "
-    "reference empty if the user didn't name a specific chore.\n"
-    "\n"
-    "Email body:\n"
-    "{email_body}"
-)
-
-
-_TARGET_MATCH_PROMPT = (
-    "Decide which active chore the user is referring to.\n"
-    "\n"
-    "Action: {action}\n"
-    "User's reference: {reference}\n"
-    "Original message:\n"
-    "{email_body}\n"
-    "\n"
-    "Candidate chores:\n"
-    "{candidates_block}\n"
-    "\n"
-    "Match against the chore title — paraphrases and partial references are "
-    "fine ('trash' matches 'Take out trash'; 'bathrooms' matches 'Clean bathrooms').\n"
-    "\n"
-    "Confidence rubric:\n"
-    "- high: one clear match. Proceed.\n"
-    "- medium: likely match worth confirming with the user (e.g. two plausible candidates).\n"
-    "- none: no candidate plausibly matches.\n"
-    "\n"
-    "Reasoning should be one short sentence — it gets shown to the user."
-)
-
-
-_UPDATE_PARSE_PROMPT = (
-    "Extract the chore update the user is requesting.\n"
-    "\n"
-    "Active chores:\n"
-    "{existing_block}\n"
-    "\n"
-    "Today is {today_day_of_week}, {today_iso} ({timezone_name}).\n"
-    "\n"
-    "Rules:\n"
-    "- target_reference: brief restatement of which chore is changing.\n"
-    "- Set new_* fields ONLY for what the user explicitly wants to change. "
-    "Leave others null.\n"
-    "- new_recurrence_type / new_recurrence: only if the user changes the schedule.\n"
-    "- new_assignee: one of 'household', 'primary', 'secondary' if the user "
-    "  reassigns — resolve named people via the mapping below.\n"
-    "{name_mapping_block}"
-    "\n"
-    "Email body:\n"
-    "{email_body}"
-)
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────
-
-
-def _format_recurrence_human(rule: dict[str, Any], rec_type: str) -> str:
-    """Render a recurrence rule + type as readable text for replies.
-
-    Examples:
-      ({freq: DAILY, interval: 2}, 'completion') → 'every 2 days (completion-based)'
-      ({freq: WEEKLY, byday: [TU]}, 'schedule')  → 'weekly on TU (schedule-based)'
-      ({freq: WEEKLY, interval: 2, byday: [SA]}, 'schedule')
-          → 'every 2 weeks on SA (schedule-based)'
+    The parent AGENT span is set by TasksAgent.run; this adds one CHAIN
+    span per node with action/outcome attributes for Phoenix.
     """
-    freq = (rule.get("frequency") or "").upper()
-    interval = int(rule.get("interval") or 1)
-    byday = ",".join(rule.get("byday") or [])
-    unit = {
-        "DAILY": "day",
-        "WEEKLY": "week",
-        "MONTHLY": "month",
-        "YEARLY": "year",
-    }.get(freq, freq.lower() or "cycle")
-    if interval == 1:
-        base = {"DAILY": "daily", "WEEKLY": "weekly", "MONTHLY": "monthly", "YEARLY": "yearly"}.get(
-            freq, freq.lower() or "every cycle"
-        )
-    else:
-        base = f"every {interval} {unit}s"
-    if byday:
-        base += f" on {byday}"
-    return f"{base} ({rec_type}-based)"
+
+    async def wrapper(state: TasksState) -> Any:
+        with tracer.start_as_current_span(f"tasks.{name}") as span:
+            span.set_attribute(_OI_SPAN_KIND, "CHAIN")
+            span.set_attribute("alfred.node", name)
+            action = state.get("action") if isinstance(state, dict) else None
+            if action:
+                span.set_attribute("alfred.action", action)
+            result = await fn(state)
+            if isinstance(result, dict):
+                outcome = result.get("outcome")
+                if outcome:
+                    span.set_attribute("alfred.outcome", outcome)
+            return result
+
+    wrapper.__name__ = getattr(fn, "__name__", name)
+    return wrapper
 
 
-def _name_mapping_block(name_map: dict[str, str]) -> str:
-    """Render a 'primary = <name>, secondary = <name>' hint into the prompt.
-
-    Returns an empty string when no names are configured — the model then
-    falls back to literal household/primary/secondary classification.
-    """
-    if not name_map:
-        return ""
-    lines = ["  Name → user_id mapping:"]
-    for uid in ("primary", "secondary"):
-        if uid in name_map:
-            lines.append(f"    • '{name_map[uid]}' → {uid}")
-    lines.append(
-        "  When the user names one of these people, set assignee to the "
-        "matching user_id. Treat case-insensitive matches and common "
-        "shortenings as a match."
-    )
-    return "\n".join(lines) + "\n"
-
-
-def _make_specialist(
-    litellm_client: LiteLLMClient, model_name: str, output_type: type
-) -> Agent:
-    model = OpenAIChatModel(
-        model_name=model_name,
-        provider=OpenAIProvider(
-            base_url=f"{litellm_client.base_url}/v1",
-            api_key=litellm_client._api_key,  # noqa: SLF001
-        ),
-    )
-    return Agent(
-        model=model,
-        output_type=output_type,
-        system_prompt=(
-            "/no_think\n"
-            "You produce strictly-typed structured output. Fill the schema "
-            "directly without preamble, explanation, or chain-of-thought."
-        ),
-    )
-
-
-def _format_existing_block(chores: list[dict]) -> str:
-    if not chores:
-        return "  (none)"
-    lines = []
-    for c in chores:
-        rule = c.get("recurrence_rule") or {}
-        freq = rule.get("frequency") or "?"
-        byday = rule.get("byday") or []
-        when = f"{freq.lower()}"
-        if byday:
-            when += f" on {','.join(byday)}"
-        lines.append(
-            f"  - id={c['id']}  '{c['title']}'  ({when}, "
-            f"{c.get('recurrence_type', '?')}-based, assignee={c.get('assignee', '?')})"
-        )
-    return "\n".join(lines)
-
-
-def _format_incomplete_text(issues: list[str]) -> str:
-    return (
-        "I couldn't fully parse your chore request.\n"
-        "Issues: " + "; ".join(issues) + ".\n\n"
-        "Reply with the chore, who's doing it, and how often, e.g. "
-        "'Add chore: take out trash every Tuesday, household'."
-    )
+# ── Graph builder ───────────────────────────────────────────────────────────
 
 
 def build_tasks_graph(
@@ -675,161 +153,126 @@ def build_tasks_graph(
     now_fn: Any = None,
     assignee_names: dict[str, str] | None = None,
 ) -> Any:
-    """Compile the tasks workflow with deps closed over.
+    """Compile the tasks workflow with all dependencies closed over.
 
-    `assignee_names` maps user_id → display name (e.g. {'primary': 'Alex',
-    'secondary': 'Sam'}). When set, the parse prompt teaches the model to
-    resolve natural-language references like 'assign to <name>' back to the
-    canonical user_id slot.
+    Args:
+        store:           ChoreStore for DB reads/writes.
+        timezone_name:   IANA tz name for date math + "today" rendering.
+        litellm_client:  Used to construct typed-output specialist agents.
+        model_name:      LiteLLM alias for the local model (default
+                         "local-default"). Cloud routing uses
+                         "cloud-default" automatically when intent
+                         classification flags complexity=complex.
+        now_fn:          Optional callable returning a tz-aware datetime.
+                         Lets the simulation harness pin "today" to a
+                         specific date deterministically.
+        assignee_names:  Optional user_id → display-name mapping. The
+                         parse prompt teaches the model to resolve names
+                         (e.g. "assign to Antonio" → primary), and the
+                         reply renderer uses these for user-facing text.
     """
     name_map = assignee_names or {}
-    intent_agent = _make_specialist(litellm_client, model_name, IntentClassification)
-    parse_local = _make_specialist(litellm_client, model_name, ChoreDraft)
-    parse_cloud = _make_specialist(litellm_client, "cloud-default", ChoreDraft)
-    dedup_local = _make_specialist(litellm_client, model_name, DuplicateCheckDecision)
-    dedup_cloud = _make_specialist(litellm_client, "cloud-default", DuplicateCheckDecision)
-    target_parse_local = _make_specialist(litellm_client, model_name, TargetReference)
-    target_parse_cloud = _make_specialist(litellm_client, "cloud-default", TargetReference)
-    target_match_local = _make_specialist(litellm_client, model_name, TargetMatch)
-    target_match_cloud = _make_specialist(litellm_client, "cloud-default", TargetMatch)
-    update_parse_local = _make_specialist(litellm_client, model_name, ChoreUpdateDraft)
-    update_parse_cloud = _make_specialist(litellm_client, "cloud-default", ChoreUpdateDraft)
-
-    def _pick_pool(state: TasksState) -> tuple[str, str]:
-        if state.get("complexity") == "complex":
-            return ("cloud", "cloud-default")
-        return ("local", model_name)
+    specialists = SpecialistRegistry.build(litellm_client, model_name)
 
     # ── Nodes ────────────────────────────────────────────────────────────
 
-    async def enrich_context(state: TasksState) -> dict:
+    async def enrich_context(state: TasksState) -> dict[str, Any]:
+        """Pure code: load today + active chores from the store."""
         tz = ZoneInfo(timezone_name)
         now = now_fn() if now_fn is not None else datetime.now(tz)
         today = now.date()
         active = await store.list_active_chores()
-        active_dicts = [
-            {
-                "id": c.id,
-                "title": c.title,
-                "assignee": c.assignee,
-                "recurrence_type": c.recurrence_type,
-                "recurrence_rule": c.recurrence_rule,
-                "object": c.object,
-                "qualifier": c.qualifier,
-            }
-            for c in active
-        ]
         return {
             "today_iso": today.isoformat(),
             "today_day_of_week": today.strftime("%A"),
             "timezone_name": timezone_name,
-            "active_chores": active_dicts,
+            "active_chores": [
+                {
+                    "id": c.id,
+                    "title": c.title,
+                    "assignee": c.assignee,
+                    "recurrence_type": c.recurrence_type,
+                    "recurrence_rule": c.recurrence_rule,
+                    "object": c.object,
+                    "qualifier": c.qualifier,
+                }
+                for c in active
+            ],
         }
 
-    async def classify_intent(state: TasksState) -> dict:
-        prompt = _INTENT_PROMPT.format(email_body=state["email_body"])
-        result = await intent_agent.run(prompt)
-        usage = result.usage()
+    async def classify_intent(state: TasksState) -> dict[str, Any]:
+        """LLM: pick action + complexity for downstream routing."""
+        prompt = INTENT_PROMPT.format(email_body=state["email_body"])
+        invocation = await specialists.intent.invoke(prompt, state)
+        if invocation.output is None:
+            return {
+                "outcome": Outcome.ERROR.value,
+                "error_message": "intent classification failed",
+                **invocation.updates,
+            }
         log.info(
             "tasks_intent_classified",
-            action=result.output.action,
-            complexity=result.output.complexity,
-            reasoning=result.output.reasoning[:120],
+            action=invocation.output.action,
+            complexity=invocation.output.complexity,
+            reasoning=invocation.output.reasoning[:120],
         )
         return {
-            "action": result.output.action,
-            "complexity": result.output.complexity,
-            "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
-            "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
+            "action": invocation.output.action,
+            "complexity": invocation.output.complexity,
+            **invocation.updates,
         }
 
-    async def parse_chore_draft(state: TasksState) -> dict:
-        prompt = _PARSE_PROMPT.format(
+    async def parse_chore_draft(state: TasksState) -> dict[str, Any]:
+        """LLM: parse the user's email into a typed ChoreDraft."""
+        prompt = PARSE_PROMPT.format(
             today_day_of_week=state["today_day_of_week"],
             today_iso=state["today_iso"],
             timezone_name=state["timezone_name"],
-            name_mapping_block=_name_mapping_block(name_map),
+            name_mapping_block=name_mapping_block(name_map),
             email_body=state["email_body"],
         )
-        pool, model_label = _pick_pool(state)
-        agent = parse_cloud if pool == "cloud" else parse_local
-        try:
-            result = await agent.run(prompt)
-            usage = result.usage()
-            draft = result.output
-            normalized_title = _normalize_title(draft.title) if draft.title else draft.title
-            if normalized_title != draft.title:
-                log.info(
-                    "tasks_title_normalized",
-                    raw=draft.title,
-                    normalized=normalized_title,
-                )
-            draft_dict = draft.model_dump()
-            draft_dict["title"] = normalized_title
+        invocation = await specialists.parse.invoke(prompt, state)
+        if invocation.output is None:
+            return {
+                "outcome": Outcome.INCOMPLETE.value,
+                "completeness_issues": ["parse_error"],
+                **invocation.updates,
+            }
+        draft = invocation.output
+        normalized = normalize_title(draft.title) if draft.title else draft.title
+        if normalized != draft.title:
             log.info(
-                "tasks_chore_parsed",
-                title=normalized_title,
-                assignee=draft.assignee,
-                recurrence_type=draft.recurrence_type,
-                model=model_label,
+                "tasks_title_normalized",
+                raw=draft.title, normalized=normalized,
             )
-            return {
-                "parsed_chore": draft_dict,
-                "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
-                "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
-            }
-        except Exception as e:  # noqa: BLE001
-            log.error("tasks_chore_parse_failed", error=str(e))
-            return {
-                "outcome": "incomplete",
-                "completeness_issues": [f"parse_error: {e}"],
-            }
+        draft_dict = draft.model_dump()
+        draft_dict["title"] = normalized
+        log.info(
+            "tasks_chore_parsed",
+            title=normalized,
+            assignee=draft.assignee,
+            recurrence_type=draft.recurrence_type,
+            model=invocation.model_label,
+        )
+        return {"parsed_chore": draft_dict, **invocation.updates}
 
-    async def check_for_duplicates(state: TasksState) -> dict:
-        """Dedup — code-side shape comparison first, LLM fallback for legacy.
-
-        Modern parses produce a structured (object, qualifier) shape on
-        every chore. When both the new draft AND every existing active
-        chore have shape data, comparison is pure code and deterministic.
-        When any side is missing shape data (legacy chores from before
-        migration 005), fall back to the LLM-based comparison so we don't
-        regress on existing data.
-        """
+    async def check_for_duplicates(state: TasksState) -> dict[str, Any]:
+        """Code-side shape comparison first; LLM fallback for legacy chores."""
         draft = state.get("parsed_chore") or {}
         existing = state.get("active_chores") or []
         new_title = draft.get("title") or ""
 
         if not new_title or not existing:
-            return {
-                "duplicate_check": {
-                    "confidence": "none",
-                    "existing_chore_id": None,
-                    "reasoning": "",
-                }
-            }
+            return {"duplicate_check": _no_match("")}
 
-        # Code-side shape comparison.
-        new_obj = _norm_shape(draft.get("object"))
-        new_qual = _norm_shape(draft.get("qualifier"))
-        if new_obj and all(c.get("object") for c in existing):
-            best: tuple[str, str | None, str] | None = None  # (confidence, chore_id, reason)
-            # Rank: high > medium > none. Stop early on a high.
-            rank = {"high": 2, "medium": 1, "none": 0}
-            for c in existing:
-                ex_obj = _norm_shape(c.get("object"))
-                ex_qual = _norm_shape(c.get("qualifier"))
-                verdict = _shape_verdict(new_obj, new_qual, ex_obj, ex_qual)
-                if verdict == "none":
-                    continue
-                reason = _shape_reason(
-                    new_title, c.get("title", c["id"]),
-                    new_obj, new_qual, ex_obj, ex_qual, verdict,
-                )
-                candidate = (verdict, c["id"], reason)
-                if best is None or rank[verdict] > rank[best[0]]:
-                    best = candidate
-                if verdict == "high":
-                    break
+        new_obj = normalize_shape(draft.get("object"))
+        new_qual = normalize_shape(draft.get("qualifier"))
+
+        # Code path: every existing chore must have an object for a
+        # deterministic comparison. Otherwise fall back to LLM.
+        all_have_shape = bool(new_obj) and all(c.get("object") for c in existing)
+        if all_have_shape:
+            best = _best_shape_match(new_title, new_obj, new_qual, existing)
             if best is None:
                 log.info(
                     "tasks_dedup_code_decision",
@@ -837,28 +280,27 @@ def build_tasks_graph(
                     new_object=new_obj, new_qualifier=new_qual,
                 )
                 return {
-                    "duplicate_check": {
-                        "confidence": "none",
-                        "existing_chore_id": None,
-                        "reasoning": "No existing chore shares this object+qualifier.",
-                    }
+                    "duplicate_check": _no_match(
+                        "No existing chore shares this object+qualifier."
+                    ),
                 }
+            confidence, chore_id, reason = best
             log.info(
                 "tasks_dedup_code_decision",
-                confidence=best[0],
-                existing_id=best[1],
+                confidence=confidence,
+                existing_id=chore_id,
                 new_object=new_obj, new_qualifier=new_qual,
             )
             return {
                 "duplicate_check": {
-                    "confidence": best[0],
-                    "existing_chore_id": best[1],
-                    "reasoning": best[2],
-                }
+                    "confidence": confidence,
+                    "existing_chore_id": chore_id,
+                    "reasoning": reason,
+                },
             }
 
-        # Fallback: at least one chore is missing structured shape data
-        # (legacy DB row from before migration 005). Use the LLM.
+        # Fallback: at least one chore is missing shape data (legacy row
+        # from before migration 005). Use the LLM specialist.
         log.info(
             "tasks_dedup_llm_fallback",
             reason="missing_shape_on_new_or_existing",
@@ -870,186 +312,152 @@ def build_tasks_graph(
             f"{(rec.get('frequency') or '?').lower()}"
             + (f" on {','.join(rec.get('byday') or [])}" if rec.get("byday") else "")
         )
-        prompt = _DEDUP_PROMPT.format(
+        prompt = DEDUP_PROMPT.format(
             new_title=new_title,
             new_recurrence=new_rec_desc,
             new_assignee=draft.get("assignee") or "household",
-            existing_block=_format_existing_block(existing),
+            existing_block=format_existing_block(existing),
         )
-        pool, model_label = _pick_pool(state)
-        agent = dedup_cloud if pool == "cloud" else dedup_local
-        try:
-            result = await agent.run(prompt)
-            usage = result.usage()
-            decision = result.output
-            log.info(
-                "tasks_dedup_decision",
-                confidence=decision.confidence,
-                existing_id=decision.existing_chore_id,
-                reasoning=decision.reasoning[:120],
-                model=model_label,
-            )
+        invocation = await specialists.dedup.invoke(prompt, state)
+        if invocation.output is None:
             return {
-                "duplicate_check": {
-                    "confidence": decision.confidence,
-                    "existing_chore_id": decision.existing_chore_id,
-                    "reasoning": decision.reasoning,
-                },
-                "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
-                "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
+                "duplicate_check": _no_match("dedup specialist failed"),
+                **invocation.updates,
             }
-        except Exception as e:  # noqa: BLE001
-            log.error("tasks_dedup_failed", error=str(e))
-            return {
-                "duplicate_check": {
-                    "confidence": "none",
-                    "existing_chore_id": None,
-                    "reasoning": f"dedup_failed: {e}",
-                }
-            }
+        decision = invocation.output
+        log.info(
+            "tasks_dedup_decision",
+            confidence=decision.confidence,
+            existing_id=decision.existing_chore_id,
+            reasoning=decision.reasoning[:120],
+            model=invocation.model_label,
+        )
+        return {
+            "duplicate_check": {
+                "confidence": decision.confidence,
+                "existing_chore_id": decision.existing_chore_id,
+                "reasoning": decision.reasoning,
+            },
+            **invocation.updates,
+        }
 
-    async def validate_chore(state: TasksState) -> dict:
+    async def validate_chore(state: TasksState) -> dict[str, Any]:
+        """Pure code: required-field check, infer recurrence_type from due_date."""
         draft = state.get("parsed_chore") or {}
         issues: list[str] = []
         if not draft.get("title"):
             issues.append("no chore title")
-
-        # Infer recurrence_type when the model left it null.
         rec_type = draft.get("recurrence_type")
         due_date = draft.get("due_date_iso")
         if not rec_type:
             rec_type = "once" if due_date else "schedule"
             draft["recurrence_type"] = rec_type
-
         if rec_type == "once":
             if not due_date:
                 issues.append(
-                    "no due date given for one-time task (e.g. 'on Friday', "
-                    "'tomorrow', '2026-06-01')"
+                    "no due date given for one-time task "
+                    "(e.g. 'on Friday', 'tomorrow', '2026-06-01')"
                 )
         else:
             rec = draft.get("recurrence")
             if not rec or not rec.get("frequency"):
                 issues.append("no recurrence given (e.g. 'every Tuesday', 'weekly')")
-
         if issues:
-            return {"outcome": "incomplete", "completeness_issues": issues}
+            return {
+                "outcome": Outcome.INCOMPLETE.value,
+                "completeness_issues": issues,
+            }
         return {"parsed_chore": draft}
 
-    async def write_chore(state: TasksState) -> dict:
+    async def write_chore(state: TasksState) -> dict[str, Any]:
+        """Insert the parsed chore into the store and surface it on state."""
         draft = state.get("parsed_chore") or {}
         title = draft["title"]
-        chore_id = draft.get("id") or _slugify(title)
-
-        # If the slug collides with an existing chore, suffix with -2, -3…
         existing_ids = {c["id"] for c in (state.get("active_chores") or [])}
-        if chore_id in existing_ids:
-            base = chore_id
-            n = 2
-            while f"{base}-{n}" in existing_ids:
-                n += 1
-            chore_id = f"{base}-{n}"
-
-        assignee = draft.get("assignee") or "household"
+        chore_id = _pick_chore_id(draft.get("id") or slugify(title), existing_ids)
         rec_type = draft.get("recurrence_type") or "schedule"
-        rec_rule = dict(draft.get("recurrence") or {})
-        shame = draft.get("shame_after_days") or 3
-        due_date = draft.get("due_date_iso") if rec_type == "once" else None
-        obj = (draft.get("object") or None)
-        if isinstance(obj, str):
-            obj = obj.strip().lower() or None
-        qual = (draft.get("qualifier") or None)
-        if isinstance(qual, str):
-            qual = qual.strip().lower() or None
         log.info(
             "tasks_write_chore_start",
-            chore_id=chore_id, title=title, assignee=assignee,
-            object=obj, qualifier=qual,
+            chore_id=chore_id, title=title,
+            assignee=draft.get("assignee") or "household",
+            object=normalize_shape(draft.get("object")),
+            qualifier=normalize_shape(draft.get("qualifier")),
         )
         try:
             chore = await store.add_chore(
                 id=chore_id,
                 title=title,
                 description=draft.get("description"),
-                assignee=assignee,
+                assignee=draft.get("assignee") or "household",
                 recurrence_type=rec_type,
-                recurrence_rule=rec_rule,
-                shame_after_days=shame,
-                due_date=due_date,
-                object=obj,
-                qualifier=qual,
+                recurrence_rule=dict(draft.get("recurrence") or {}),
+                shame_after_days=draft.get("shame_after_days") or 3,
+                due_date=draft.get("due_date_iso") if rec_type == "once" else None,
+                object=normalize_shape(draft.get("object")),
+                qualifier=normalize_shape(draft.get("qualifier")),
             )
-            log.info("tasks_write_chore_done", chore_id=chore.id)
-            return {
-                "created_chore": {
-                    "id": chore.id,
-                    "title": chore.title,
-                    "assignee": chore.assignee,
-                    "recurrence_type": chore.recurrence_type,
-                    "recurrence_rule": chore.recurrence_rule,
-                    "shame_after_days": chore.shame_after_days,
-                    "due_date": chore.due_date,
-                    "object": chore.object,
-                    "qualifier": chore.qualifier,
-                },
-                "outcome": "created",
-            }
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — surface store errors as outcome
             log.error("tasks_write_failed", error=str(e))
-            return {"outcome": "error", "error_message": str(e)}
+            return {"outcome": Outcome.ERROR.value, "error_message": str(e)}
+        log.info("tasks_write_chore_done", chore_id=chore.id)
+        return {
+            "created_chore": {
+                "id": chore.id,
+                "title": chore.title,
+                "assignee": chore.assignee,
+                "recurrence_type": chore.recurrence_type,
+                "recurrence_rule": chore.recurrence_rule,
+                "shame_after_days": chore.shame_after_days,
+                "due_date": chore.due_date,
+                "object": chore.object,
+                "qualifier": chore.qualifier,
+            },
+            "outcome": Outcome.CREATED.value,
+        }
 
-    async def mark_duplicate_high(state: TasksState) -> dict:
-        return {"outcome": "duplicate_existing"}
+    async def mark_duplicate_high(_state: TasksState) -> dict[str, Any]:
+        return {"outcome": Outcome.DUPLICATE_EXISTING.value}
 
-    async def mark_duplicate_medium(state: TasksState) -> dict:
-        return {"outcome": "duplicate_needs_confirmation"}
+    async def mark_duplicate_medium(_state: TasksState) -> dict[str, Any]:
+        return {"outcome": Outcome.DUPLICATE_NEEDS_CONFIRMATION.value}
 
-    # ── Target identification (shared by complete/delete) ─────────────────
+    # ── Target identification (shared by complete/delete/update) ─────────
 
-    async def parse_target_reference(state: TasksState) -> dict:
+    async def parse_target_reference(state: TasksState) -> dict[str, Any]:
+        """LLM: extract the user's natural-language reference to a chore."""
         action = state.get("action", "")
         existing = state.get("active_chores") or []
         if not existing:
             return {
                 "target_reference": {"reference": ""},
-                "outcome": "target_not_found",
+                "outcome": Outcome.TARGET_NOT_FOUND.value,
             }
-        prompt = _TARGET_PARSE_PROMPT.format(
+        prompt = TARGET_PARSE_PROMPT.format(
             action=action,
-            existing_block=_format_existing_block(existing),
+            existing_block=format_existing_block(existing),
             email_body=state["email_body"],
         )
-        pool, model_label = _pick_pool(state)
-        agent = target_parse_cloud if pool == "cloud" else target_parse_local
-        try:
-            result = await agent.run(prompt)
-            usage = result.usage()
-            ref = result.output
-            log.info(
-                "tasks_target_parsed",
-                action=action,
-                reference=ref.reference,
-                model=model_label,
-            )
-            return {
-                "target_reference": {"reference": ref.reference},
-                "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
-                "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
-            }
-        except Exception as e:  # noqa: BLE001
-            log.error("tasks_target_parse_failed", error=str(e))
+        invocation = await specialists.target_parse.invoke(prompt, state)
+        if invocation.output is None:
             return {
                 "target_reference": {"reference": ""},
-                "outcome": "target_not_found",
-                "error_message": f"parse_error: {e}",
+                "outcome": Outcome.TARGET_NOT_FOUND.value,
+                "error_message": "target reference parse failed",
+                **invocation.updates,
             }
+        log.info(
+            "tasks_target_parsed",
+            action=action,
+            reference=invocation.output.reference,
+            model=invocation.model_label,
+        )
+        return {
+            "target_reference": {"reference": invocation.output.reference},
+            **invocation.updates,
+        }
 
-    async def reason_about_target_match(state: TasksState) -> dict:
-        """Match the user's natural-language reference to one active chore.
-
-        Direct id match short-circuits (free, deterministic). Everything
-        else goes to the LLM specialist with all candidates.
-        """
+    async def reason_about_target_match(state: TasksState) -> dict[str, Any]:
+        """Resolve the reference to one active chore (id-shortcut, then LLM)."""
         action = state.get("action", "")
         existing = state.get("active_chores") or []
         target = state.get("target_reference") or {}
@@ -1061,10 +469,10 @@ def build_tasks_graph(
                     "confidence": "none",
                     "chore_id": None,
                     "reasoning": "No active chores being tracked.",
-                }
+                },
             }
 
-        # Direct id match — user said the slug. Free deterministic shortcut.
+        # Direct id shortcut — deterministic, no LLM cost.
         ref_lower = reference.lower().strip()
         for c in existing:
             if c["id"] == ref_lower:
@@ -1073,62 +481,53 @@ def build_tasks_graph(
                         "confidence": "high",
                         "chore_id": c["id"],
                         "reasoning": f"Direct id match: '{c['id']}'.",
-                    }
+                    },
                 }
 
-        lines = []
-        for c in existing:
-            lines.append(
-                f"  - id={c['id']}  '{c['title']}'  (assignee={c.get('assignee', '?')})"
-            )
-        prompt = _TARGET_MATCH_PROMPT.format(
+        candidates_block = "\n".join(
+            f"  - id={c['id']}  '{c['title']}'  (assignee={c.get('assignee', '?')})"
+            for c in existing
+        )
+        prompt = TARGET_MATCH_PROMPT.format(
             action=action,
             reference=reference or "(no clear reference)",
             email_body=state["email_body"],
-            candidates_block="\n".join(lines),
+            candidates_block=candidates_block,
         )
-        pool, model_label = _pick_pool(state)
-        agent = target_match_cloud if pool == "cloud" else target_match_local
-        try:
-            result = await agent.run(prompt)
-            usage = result.usage()
-            decision = result.output
-            log.info(
-                "tasks_target_decision",
-                action=action,
-                confidence=decision.confidence,
-                chore_id=(decision.chore_id or ""),
-                model=model_label,
-            )
-            return {
-                "target_match": {
-                    "confidence": decision.confidence,
-                    "chore_id": decision.chore_id,
-                    "reasoning": decision.reasoning,
-                },
-                "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
-                "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
-            }
-        except Exception as e:  # noqa: BLE001
-            log.error("tasks_target_reason_failed", error=str(e))
+        invocation = await specialists.target_match.invoke(prompt, state)
+        if invocation.output is None:
             return {
                 "target_match": {
                     "confidence": "none",
                     "chore_id": None,
-                    "reasoning": f"reasoning failed: {e}",
-                }
+                    "reasoning": "target-match specialist failed",
+                },
+                **invocation.updates,
             }
+        decision = invocation.output
+        log.info(
+            "tasks_target_decision",
+            action=action,
+            confidence=decision.confidence,
+            chore_id=decision.chore_id or "",
+            model=invocation.model_label,
+        )
+        return {
+            "target_match": {
+                "confidence": decision.confidence,
+                "chore_id": decision.chore_id,
+                "reasoning": decision.reasoning,
+            },
+            **invocation.updates,
+        }
 
-    # ── Complete branch ───────────────────────────────────────────────────
+    # ── Complete branch ──────────────────────────────────────────────────
 
-    async def write_completion(state: TasksState) -> dict:
+    async def write_completion(state: TasksState) -> dict[str, Any]:
         match = state.get("target_match") or {}
         chore_id = match.get("chore_id")
         if not chore_id:
-            return {"outcome": "target_not_found"}
-        # The completion is attributed to the inbound source. We don't know
-        # the sender precisely here — store the assignee bucket as a sensible
-        # default; the inbox/IMAP poller can override via context later.
+            return {"outcome": Outcome.TARGET_NOT_FOUND.value}
         existing = state.get("active_chores") or []
         chore = next((c for c in existing if c["id"] == chore_id), None)
         completed_by = (chore or {}).get("assignee") or "household"
@@ -1138,134 +537,119 @@ def build_tasks_graph(
                 completed_by=completed_by,
                 completed_via="email",
             )
-            return {
-                "completed_chore": {
-                    "id": chore_id,
-                    "title": (chore or {}).get("title", chore_id),
-                    "completed_by": comp.completed_by,
-                    "completed_at": comp.completed_at,
-                },
-                "outcome": "completed",
-            }
         except Exception as e:  # noqa: BLE001
             log.error("tasks_complete_failed", error=str(e))
-            return {"outcome": "error", "error_message": str(e)}
+            return {"outcome": Outcome.ERROR.value, "error_message": str(e)}
+        return {
+            "completed_chore": {
+                "id": chore_id,
+                "title": (chore or {}).get("title", chore_id),
+                "completed_by": comp.completed_by,
+                "completed_at": comp.completed_at,
+            },
+            "outcome": Outcome.COMPLETED.value,
+        }
 
-    # ── Delete branch ─────────────────────────────────────────────────────
+    # ── Delete branch ────────────────────────────────────────────────────
 
-    async def soft_delete_chore_action(state: TasksState) -> dict:
+    async def soft_delete_chore_action(state: TasksState) -> dict[str, Any]:
         match = state.get("target_match") or {}
         chore_id = match.get("chore_id")
         if not chore_id:
-            return {"outcome": "target_not_found"}
+            return {"outcome": Outcome.TARGET_NOT_FOUND.value}
         existing = state.get("active_chores") or []
         chore = next((c for c in existing if c["id"] == chore_id), None)
         try:
             ok = await store.soft_delete_chore(chore_id)
         except Exception as e:  # noqa: BLE001
             log.error("tasks_delete_failed", error=str(e))
-            return {"outcome": "error", "error_message": str(e)}
+            return {"outcome": Outcome.ERROR.value, "error_message": str(e)}
         if not ok:
-            return {"outcome": "target_not_found"}
+            return {"outcome": Outcome.TARGET_NOT_FOUND.value}
         return {
             "deleted_chore": {
                 "id": chore_id,
                 "title": (chore or {}).get("title", chore_id),
             },
-            "outcome": "deleted",
+            "outcome": Outcome.DELETED.value,
         }
 
-    # ── List branch ───────────────────────────────────────────────────────
+    # ── List branch ──────────────────────────────────────────────────────
 
-    async def render_pending_summary(state: TasksState) -> dict:
+    async def render_pending_summary(_state: TasksState) -> dict[str, Any]:
         tz = ZoneInfo(timezone_name)
         now = now_fn() if now_fn is not None else datetime.now(tz)
         statuses = await store.status_for_all_active(now=now, tz=tz)
-        summary: list[dict] = []
-        for s in statuses:
-            summary.append(
-                {
-                    "id": s.chore.id,
-                    "title": s.chore.title,
-                    "assignee": s.chore.assignee,
-                    "next_due_iso": s.next_due.isoformat(),
-                    "overdue_days": s.overdue_days,
-                    "last_completed_at": (
-                        s.last_completed_at.isoformat() if s.last_completed_at else None
-                    ),
-                }
-            )
-        return {"pending_summary": summary, "outcome": "listed"}
+        summary = [
+            {
+                "id": s.chore.id,
+                "title": s.chore.title,
+                "assignee": s.chore.assignee,
+                "next_due_iso": s.next_due.isoformat(),
+                "overdue_days": s.overdue_days,
+                "last_completed_at": (
+                    s.last_completed_at.isoformat() if s.last_completed_at else None
+                ),
+            }
+            for s in statuses
+        ]
+        return {"pending_summary": summary, "outcome": Outcome.LISTED.value}
 
-    # ── Update branch ─────────────────────────────────────────────────────
+    # ── Update branch ────────────────────────────────────────────────────
 
-    async def parse_chore_update(state: TasksState) -> dict:
+    async def parse_chore_update(state: TasksState) -> dict[str, Any]:
         existing = state.get("active_chores") or []
         if not existing:
-            return {"outcome": "target_not_found"}
-        prompt = _UPDATE_PARSE_PROMPT.format(
-            existing_block=_format_existing_block(existing),
+            return {"outcome": Outcome.TARGET_NOT_FOUND.value}
+        prompt = UPDATE_PARSE_PROMPT.format(
+            existing_block=format_existing_block(existing),
             today_day_of_week=state.get("today_day_of_week", ""),
             today_iso=state.get("today_iso", ""),
             timezone_name=state.get("timezone_name", ""),
-            name_mapping_block=_name_mapping_block(name_map),
+            name_mapping_block=name_mapping_block(name_map),
             email_body=state["email_body"],
         )
-        pool, model_label = _pick_pool(state)
-        agent = update_parse_cloud if pool == "cloud" else update_parse_local
-        try:
-            result = await agent.run(prompt)
-            usage = result.usage()
-            draft = result.output
-            log.info(
-                "tasks_update_parsed",
-                target=draft.target_reference,
-                changes=[k for k, v in draft.model_dump().items()
-                         if k != "target_reference" and v is not None],
-                model=model_label,
-            )
+        invocation = await specialists.update_parse.invoke(prompt, state)
+        if invocation.output is None:
             return {
-                "update_draft": draft.model_dump(),
-                "target_reference": {"reference": draft.target_reference},
-                "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
-                "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
+                "outcome": Outcome.INCOMPLETE.value,
+                "completeness_issues": ["update_parse_failed"],
+                **invocation.updates,
             }
-        except Exception as e:  # noqa: BLE001
-            log.error("tasks_update_parse_failed", error=str(e))
-            return {
-                "outcome": "incomplete",
-                "completeness_issues": [f"parse_error: {e}"],
-            }
+        draft = invocation.output
+        log.info(
+            "tasks_update_parsed",
+            target=draft.target_reference,
+            changes=[
+                k for k, v in draft.model_dump().items()
+                if k != "target_reference" and v is not None
+            ],
+            model=invocation.model_label,
+        )
+        return {
+            "update_draft": draft.model_dump(),
+            "target_reference": {"reference": draft.target_reference},
+            **invocation.updates,
+        }
 
-    async def apply_chore_update(state: TasksState) -> dict:
+    async def apply_chore_update(state: TasksState) -> dict[str, Any]:
         match = state.get("target_match") or {}
         chore_id = match.get("chore_id")
         if not chore_id:
-            return {"outcome": "target_not_found"}
-        draft = state.get("update_draft") or {}
-        fields: dict[str, Any] = {}
-        if draft.get("new_title"):
-            fields["title"] = _normalize_title(draft["new_title"])
-        if draft.get("new_assignee"):
-            fields["assignee"] = draft["new_assignee"]
-        if draft.get("new_recurrence_type"):
-            fields["recurrence_type"] = draft["new_recurrence_type"]
-        if draft.get("new_recurrence"):
-            fields["recurrence_rule"] = draft["new_recurrence"]
-        if draft.get("new_shame_after_days") is not None:
-            fields["shame_after_days"] = draft["new_shame_after_days"]
+            return {"outcome": Outcome.TARGET_NOT_FOUND.value}
+        fields = _build_update_fields(state.get("update_draft") or {})
         if not fields:
             return {
-                "outcome": "incomplete",
+                "outcome": Outcome.INCOMPLETE.value,
                 "completeness_issues": ["no changes specified"],
             }
         try:
             updated = await store.update_chore(chore_id, **fields)
         except Exception as e:  # noqa: BLE001
             log.error("tasks_update_failed", error=str(e))
-            return {"outcome": "error", "error_message": str(e)}
+            return {"outcome": Outcome.ERROR.value, "error_message": str(e)}
         if updated is None:
-            return {"outcome": "target_not_found"}
+            return {"outcome": Outcome.TARGET_NOT_FOUND.value}
         return {
             "updated_chore": {
                 "id": updated.id,
@@ -1276,226 +660,53 @@ def build_tasks_graph(
                 "shame_after_days": updated.shame_after_days,
                 "changed_fields": list(fields.keys()),
             },
-            "outcome": "updated",
+            "outcome": Outcome.UPDATED.value,
         }
 
-    async def mark_target_needs_confirmation(state: TasksState) -> dict:
-        return {"outcome": "target_needs_confirmation"}
+    # ── Marker nodes (set outcome only) ──────────────────────────────────
 
-    async def mark_target_not_found(state: TasksState) -> dict:
-        return {"outcome": "target_not_found"}
+    async def mark_target_needs_confirmation(_s: TasksState) -> dict[str, Any]:
+        return {"outcome": Outcome.TARGET_NEEDS_CONFIRMATION.value}
 
-    async def mark_clarification(state: TasksState) -> dict:
-        return {"outcome": "clarification"}
+    async def mark_target_not_found(_s: TasksState) -> dict[str, Any]:
+        return {"outcome": Outcome.TARGET_NOT_FOUND.value}
 
-    async def build_reply(state: TasksState) -> dict:
-        from alfred.notifications.calendar_render import (
-            render_clarification_html,
-            render_clarification_plain,
-        )
+    async def mark_clarification(_s: TasksState) -> dict[str, Any]:
+        return {"outcome": Outcome.CLARIFICATION.value}
 
-        outcome = state.get("outcome", "clarification")
+    # ── Reply ────────────────────────────────────────────────────────────
 
-        # Guard against stale-state UX bugs: if a side-effect node populated
-        # one of the result dicts (created_chore / completed_chore / etc.)
-        # but `outcome` ended up empty or pointing at a clarification branch,
-        # always render the success reply that matches the populated dict.
-        # Mirrors the symptom the user hit where a chore was written but the
-        # email reply still said "Need more information".
-        result_outcomes = {
-            "created_chore": "created",
-            "completed_chore": "completed",
-            "deleted_chore": "deleted",
-            "updated_chore": "updated",
-        }
-        for key, success in result_outcomes.items():
-            if state.get(key) and outcome != success:
-                log.warning(
-                    "tasks_build_reply_outcome_mismatch",
-                    populated=key,
-                    state_outcome=outcome,
-                    rendering_as=success,
-                )
-                outcome = success
-                break
-
+    async def build_reply(state: TasksState) -> dict[str, Any]:
+        """Render the user-facing reply via the dispatch table in replies.py."""
+        final_outcome, mismatch_key = resolve_outcome(state)
+        if mismatch_key is not None:
+            log.warning(
+                "tasks_build_reply_outcome_mismatch",
+                populated=mismatch_key,
+                state_outcome=state.get("outcome"),
+                rendering_as=final_outcome,
+            )
         log.info(
             "tasks_build_reply",
-            outcome=outcome,
+            outcome=final_outcome,
             has_created=bool(state.get("created_chore")),
             has_completed=bool(state.get("completed_chore")),
             has_deleted=bool(state.get("deleted_chore")),
             has_updated=bool(state.get("updated_chore")),
         )
-
-        # Compose (header, txt) per outcome. The HTML envelope's banner
-        # comes from `header` — using outcome-specific headers means
-        # success replies don't get a misleading "Need a bit more info"
-        # title in the HTML.
-        header = "Need a bit more info"
-        txt: str
-
-        if outcome == "created":
-            c = state["created_chore"]
-            if c["recurrence_type"] == "once":
-                when = f"due {c.get('due_date') or '?'} (one-time)"
-            else:
-                when = _format_recurrence_human(
-                    c.get("recurrence_rule") or {}, c["recurrence_type"]
-                )
-            header = "Chore added"
-            txt = (
-                f"Added chore '{c['title']}' (id: {c['id']})\n"
-                f"  • assignee: {c['assignee']}\n"
-                f"  • {when}\n"
-                f"  • shame after: {c['shame_after_days']} days overdue"
-            )
-
-        elif outcome == "duplicate_existing":
-            dup = state.get("duplicate_check") or {}
-            existing_id = dup.get("existing_chore_id") or "?"
-            header = "Duplicate chore"
-            txt = (
-                f"This looks like the same chore as '{existing_id}' that's "
-                f"already on the list. {dup.get('reasoning', '')}\n\n"
-                "Did you mean to update the existing chore? Reply with what "
-                "to change, or 'add anyway' if it's actually a separate chore."
-            )
-
-        elif outcome == "duplicate_needs_confirmation":
-            dup = state.get("duplicate_check") or {}
-            existing_id = dup.get("existing_chore_id") or "?"
-            header = "Possible duplicate"
-            txt = (
-                f"I think this might overlap with the existing chore "
-                f"'{existing_id}'. {dup.get('reasoning', '')}\n\n"
-                "Reply 'add anyway' to create it as a new chore, or describe "
-                "the difference so I can update the existing one instead."
-            )
-
-        elif outcome == "completed":
-            c = state["completed_chore"]
-            header = "Chore completed"
-            txt = (
-                f"Marked '{c['title']}' (id: {c['id']}) as done.\n"
-                f"  • completed by: {c['completed_by']}\n"
-                f"  • at: {c['completed_at']}"
-            )
-
-        elif outcome == "deleted":
-            c = state["deleted_chore"]
-            header = "Chore removed"
-            txt = (
-                f"Removed '{c['title']}' (id: {c['id']}) from tracking.\n\n"
-                "You won't get reminders for this chore anymore. Existing "
-                "completion history is preserved."
-            )
-
-        elif outcome == "updated":
-            c = state["updated_chore"]
-            changes = ", ".join(c.get("changed_fields", [])) or "(none)"
-            when = _format_recurrence_human(
-                c.get("recurrence_rule") or {}, c["recurrence_type"]
-            )
-            header = "Chore updated"
-            txt = (
-                f"Updated '{c['title']}' (id: {c['id']}). Changed: {changes}.\n"
-                f"  • assignee: {c['assignee']}\n"
-                f"  • recurrence: {when}\n"
-                f"  • shame after: {c['shame_after_days']} days overdue"
-            )
-
-        elif outcome == "listed":
-            summary = state.get("pending_summary") or []
-            header = "Your chores"
-            if not summary:
-                txt = "No chores are currently being tracked."
-            else:
-                overdue = [s for s in summary if s["overdue_days"] > 0]
-                due_today = [s for s in summary if s["overdue_days"] == 0]
-                upcoming = [s for s in summary if s["overdue_days"] < 0]
-
-                lines: list[str] = []
-                if overdue:
-                    lines.append("OVERDUE")
-                    for s in sorted(overdue, key=lambda x: -x["overdue_days"]):
-                        lines.append(
-                            f"  • {s['title']} (id: {s['id']}, {s['assignee']}) — "
-                            f"{s['overdue_days']}d overdue"
-                        )
-                if due_today:
-                    if lines:
-                        lines.append("")
-                    lines.append("DUE TODAY")
-                    for s in due_today:
-                        lines.append(
-                            f"  • {s['title']} (id: {s['id']}, {s['assignee']})"
-                        )
-                if upcoming:
-                    if lines:
-                        lines.append("")
-                    lines.append("UPCOMING")
-                    for s in upcoming:
-                        lines.append(
-                            f"  • {s['title']} (id: {s['id']}, {s['assignee']}) — "
-                            f"due {s['next_due_iso'][:10]}"
-                        )
-                txt = "\n".join(lines)
-
-        elif outcome == "target_needs_confirmation":
-            match = state.get("target_match") or {}
-            chore_id = match.get("chore_id") or "?"
-            header = "Need confirmation"
-            txt = (
-                f"I think you mean the chore '{chore_id}'. "
-                f"{match.get('reasoning', '')}\n\n"
-                "Reply 'yes' to confirm, or give me more detail to pick a different one."
-            )
-
-        elif outcome == "target_not_found":
-            action = state.get("action") or "that"
-            ref = (state.get("target_reference") or {}).get("reference") or ""
-            tail = f" matching '{ref}'" if ref else ""
-            txt = (
-                f"I couldn't find a chore{tail} to {action}. "
-                "Reply with the chore id or a clearer name."
-            )
-
-        elif outcome == "incomplete":
-            txt = _format_incomplete_text(state.get("completeness_issues", []))
-
-        elif outcome == "unsupported":
-            header = "Not supported yet"
-            txt = state.get("error_message", "That action isn't supported yet.")
-
-        elif outcome == "error":
-            header = "Something went wrong"
-            txt = (
-                "Sorry — something went wrong while processing your chore: "
-                + state.get("error_message", "unknown error")
-            )
-
-        else:
-            # default: unclassified clarification
-            txt = (
-                "I couldn't tell what you wanted to do with the chore list. Try "
-                "something like 'Add chore: take out trash every Tuesday, household'."
-            )
-
+        payload = build_payload(state, name_map)
         return {
-            "reply_plain": render_clarification_plain(txt),
-            "reply_html": render_clarification_html(txt, header=header),
+            "reply_plain": render_reply_plain(payload),
+            "reply_html": render_reply_html(payload),
         }
 
-    # ── Edges ────────────────────────────────────────────────────────────
+    # ── Edge predicates ──────────────────────────────────────────────────
 
     def route_after_intent(state: TasksState) -> str:
         action = state.get("action", "clarify")
         if action == "create":
             return "parse_chore_draft"
-        if action == "complete":
-            return "parse_target_reference"
-        if action == "delete":
+        if action in ("complete", "delete"):
             return "parse_target_reference"
         if action == "update":
             return "parse_chore_update"
@@ -1504,14 +715,12 @@ def build_tasks_graph(
         return "mark_clarification"
 
     def route_after_parse(state: TasksState) -> str:
-        # Parse may have short-circuited to incomplete on exception.
-        if state.get("outcome") == "incomplete":
+        if state.get("outcome") == Outcome.INCOMPLETE.value:
             return "build_reply"
         return "check_for_duplicates"
 
     def route_after_dedup(state: TasksState) -> str:
-        dup = state.get("duplicate_check") or {}
-        conf = dup.get("confidence", "none")
+        conf = (state.get("duplicate_check") or {}).get("confidence", "none")
         if conf == "high":
             return "mark_duplicate_high"
         if conf == "medium":
@@ -1519,22 +728,22 @@ def build_tasks_graph(
         return "validate_chore"
 
     def route_after_validate(state: TasksState) -> str:
-        return "build_reply" if state.get("outcome") == "incomplete" else "write_chore"
+        if state.get("outcome") == Outcome.INCOMPLETE.value:
+            return "build_reply"
+        return "write_chore"
 
     def route_after_target_parse(state: TasksState) -> str:
-        if state.get("outcome") == "target_not_found":
+        if state.get("outcome") == Outcome.TARGET_NOT_FOUND.value:
             return "build_reply"
         return "reason_about_target_match"
 
     def route_after_target_match(state: TasksState) -> str:
         action = state.get("action", "")
-        match = state.get("target_match") or {}
-        conf = match.get("confidence", "none")
+        conf = (state.get("target_match") or {}).get("confidence", "none")
         if conf == "medium":
             return "mark_target_needs_confirmation"
         if conf == "none":
             return "mark_target_not_found"
-        # high confidence — dispatch by action
         if action == "complete":
             return "write_completion"
         if action == "delete":
@@ -1544,14 +753,17 @@ def build_tasks_graph(
         return "mark_clarification"
 
     def route_after_update_parse(state: TasksState) -> str:
-        if state.get("outcome") in {"incomplete", "target_not_found"}:
+        if state.get("outcome") in (
+            Outcome.INCOMPLETE.value,
+            Outcome.TARGET_NOT_FOUND.value,
+        ):
             return "build_reply"
         return "reason_about_target_match"
 
-    # ── Assemble ─────────────────────────────────────────────────────────
+    # ── Graph assembly ───────────────────────────────────────────────────
 
     graph = StateGraph(TasksState)
-    for node_name, fn in [
+    for node_name, fn in (
         ("enrich_context", enrich_context),
         ("classify_intent", classify_intent),
         ("parse_chore_draft", parse_chore_draft),
@@ -1571,7 +783,7 @@ def build_tasks_graph(
         ("mark_target_not_found", mark_target_not_found),
         ("mark_clarification", mark_clarification),
         ("build_reply", build_reply),
-    ]:
+    ):
         graph.add_node(node_name, _traced_node(node_name, fn))
 
     graph.set_entry_point("enrich_context")
@@ -1587,18 +799,14 @@ def build_tasks_graph(
             "mark_clarification": "mark_clarification",
         },
     )
+
     # Create branch
     graph.add_conditional_edges(
-        "parse_chore_draft",
-        route_after_parse,
-        {
-            "build_reply": "build_reply",
-            "check_for_duplicates": "check_for_duplicates",
-        },
+        "parse_chore_draft", route_after_parse,
+        {"build_reply": "build_reply", "check_for_duplicates": "check_for_duplicates"},
     )
     graph.add_conditional_edges(
-        "check_for_duplicates",
-        route_after_dedup,
+        "check_for_duplicates", route_after_dedup,
         {
             "mark_duplicate_high": "mark_duplicate_high",
             "mark_duplicate_medium": "mark_duplicate_medium",
@@ -1606,28 +814,20 @@ def build_tasks_graph(
         },
     )
     graph.add_conditional_edges(
-        "validate_chore",
-        route_after_validate,
-        {
-            "build_reply": "build_reply",
-            "write_chore": "write_chore",
-        },
+        "validate_chore", route_after_validate,
+        {"build_reply": "build_reply", "write_chore": "write_chore"},
     )
-    graph.add_edge("write_chore", "build_reply")
-    graph.add_edge("mark_duplicate_high", "build_reply")
-    graph.add_edge("mark_duplicate_medium", "build_reply")
-    # Complete / delete branch (shared identifier)
+
+    # Complete/delete/update share the target-identification step
     graph.add_conditional_edges(
-        "parse_target_reference",
-        route_after_target_parse,
+        "parse_target_reference", route_after_target_parse,
         {
             "build_reply": "build_reply",
             "reason_about_target_match": "reason_about_target_match",
         },
     )
     graph.add_conditional_edges(
-        "reason_about_target_match",
-        route_after_target_match,
+        "reason_about_target_match", route_after_target_match,
         {
             "write_completion": "write_completion",
             "soft_delete_chore_action": "soft_delete_chore_action",
@@ -1637,24 +837,94 @@ def build_tasks_graph(
             "mark_clarification": "mark_clarification",
         },
     )
-    graph.add_edge("write_completion", "build_reply")
-    graph.add_edge("soft_delete_chore_action", "build_reply")
-    # Update branch (parse first to know what to change, then identify target)
     graph.add_conditional_edges(
-        "parse_chore_update",
-        route_after_update_parse,
+        "parse_chore_update", route_after_update_parse,
         {
             "build_reply": "build_reply",
             "reason_about_target_match": "reason_about_target_match",
         },
     )
-    graph.add_edge("apply_chore_update", "build_reply")
-    # List branch
-    graph.add_edge("render_pending_summary", "build_reply")
-    # Misc
-    graph.add_edge("mark_target_needs_confirmation", "build_reply")
-    graph.add_edge("mark_target_not_found", "build_reply")
-    graph.add_edge("mark_clarification", "build_reply")
+
+    # Terminal edges
+    for src in (
+        "write_chore",
+        "mark_duplicate_high",
+        "mark_duplicate_medium",
+        "write_completion",
+        "soft_delete_chore_action",
+        "apply_chore_update",
+        "render_pending_summary",
+        "mark_target_needs_confirmation",
+        "mark_target_not_found",
+        "mark_clarification",
+    ):
+        graph.add_edge(src, "build_reply")
     graph.add_edge("build_reply", END)
 
     return graph.compile()
+
+
+# ── Module-level helpers (pure, stateless) ──────────────────────────────────
+
+
+def _no_match(reason: str) -> dict[str, Any]:
+    """Helper: empty duplicate-check result."""
+    return {"confidence": "none", "existing_chore_id": None, "reasoning": reason}
+
+
+def _pick_chore_id(candidate: str, taken: set[str]) -> str:
+    """Pick a free chore id, suffixing -2, -3, ... on slug collisions."""
+    if candidate not in taken:
+        return candidate
+    n = 2
+    while f"{candidate}-{n}" in taken:
+        n += 1
+    return f"{candidate}-{n}"
+
+
+def _best_shape_match(
+    new_title: str,
+    new_obj: str | None,
+    new_qual: str | None,
+    existing: list[dict],
+) -> tuple[str, str, str] | None:
+    """Return (confidence, chore_id, reason) for the strongest shape match.
+
+    None if no existing chore matches at any confidence level. Stops early
+    when a 'high' match is found.
+    """
+    rank = {"high": 2, "medium": 1, "none": 0}
+    best: tuple[str, str, str] | None = None
+    for c in existing:
+        ex_obj = normalize_shape(c.get("object"))
+        ex_qual = normalize_shape(c.get("qualifier"))
+        verdict = shape_verdict(new_obj, new_qual, ex_obj, ex_qual)
+        if verdict == "none":
+            continue
+        reason = shape_reason(new_title, c.get("title", c["id"]), new_qual, verdict)
+        candidate = (verdict, c["id"], reason)
+        if best is None or rank[verdict] > rank[best[0]]:
+            best = candidate
+        if verdict == "high":
+            break
+    return best
+
+
+def _build_update_fields(draft: dict[str, Any]) -> dict[str, Any]:
+    """Translate a ChoreUpdateDraft dict into ChoreStore.update_chore kwargs."""
+    fields: dict[str, Any] = {}
+    if draft.get("new_title"):
+        fields["title"] = normalize_title(draft["new_title"])
+    if draft.get("new_assignee"):
+        fields["assignee"] = draft["new_assignee"]
+    if draft.get("new_recurrence_type"):
+        fields["recurrence_type"] = draft["new_recurrence_type"]
+    if draft.get("new_recurrence"):
+        fields["recurrence_rule"] = draft["new_recurrence"]
+    if draft.get("new_shame_after_days") is not None:
+        fields["shame_after_days"] = draft["new_shame_after_days"]
+    return fields
+
+
+# Re-export so external callers don't have to know module layout.
+__all__ = ["TasksState", "build_tasks_graph", "format_recurrence_human"]

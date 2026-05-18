@@ -77,8 +77,10 @@
   expect:
     outcome: created
     active_count_after: 1
-    reply_contains: ["primary", "every 2"]
-    reply_excludes: ["secondary", "household"]
+    # Display-name humanization: 'primary' renders as the configured name
+    # ('Alex' in the sim runner). Schedule renders with the interval.
+    reply_contains: ["Alex", "every 2"]
+    reply_excludes: ["Sam", "Household"]
 
 # ─────────────────────────────────────────────────────────────────────────
 # CREATE — one-time tasks with a set due date
@@ -547,7 +549,8 @@
   expect:
     outcome: updated
     active_count_after: 1
-    reply_contains: ["secondary"]
+    # 'secondary' renders as the configured display name in sim ('Sam').
+    reply_contains: ["Sam"]
 
 - name: update_recurrence_interval
   kind: tasks
