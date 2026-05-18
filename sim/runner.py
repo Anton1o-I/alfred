@@ -120,6 +120,10 @@ async def run_scenarios(
                     litellm_client=litellm_client,
                     timezone_name=timezone,
                     now_fn=lambda fn=fixed_now: fn,
+                    # Fixed persona-neutral test identities so scenarios can
+                    # assert that natural-language assignee references resolve
+                    # correctly without leaking real names into the repo.
+                    assignee_names={"primary": "Alex", "secondary": "Sam"},
                 )
                 result = await agent.run(sc.email, ctx)
                 failures = await _check_task_expectations(sc, result, db)
@@ -205,8 +209,9 @@ async def _make_in_memory_db(sc: Scenario) -> Database:
         await db.execute(
             "INSERT INTO chores "
             "(id, title, description, assignee, recurrence_type, "
-            " recurrence_rule, shame_after_days, active, created_at, due_date) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " recurrence_rule, shame_after_days, active, created_at, due_date, "
+            " object, qualifier) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 c["id"],
                 c["title"],
@@ -218,6 +223,8 @@ async def _make_in_memory_db(sc: Scenario) -> Database:
                 1 if c.get("active", True) else 0,
                 c.get("created_at") or "2026-01-01 00:00:00",
                 c.get("due_date"),
+                c.get("object"),
+                c.get("qualifier"),
             ),
         )
     for comp in sc.initial_completions:

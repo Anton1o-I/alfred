@@ -33,6 +33,11 @@ class Chore:
     active: bool
     created_at: str
     due_date: str | None = None  # ISO date for one-time tasks
+    # Structured shape — used by dedup for deterministic code comparison.
+    # Both nullable so legacy chores (created before migration 005) fall
+    # through to the LLM-based dedup fallback.
+    object: str | None = None
+    qualifier: str | None = None
 
 
 @dataclass
@@ -73,12 +78,15 @@ class ChoreStore:
         description: str | None = None,
         shame_after_days: int = 3,
         due_date: str | None = None,
+        object: str | None = None,  # noqa: A002 — column name, shadowing builtin is intentional
+        qualifier: str | None = None,
     ) -> Chore:
         await self._db.execute(
             "INSERT INTO chores "
             "(id, title, description, assignee, recurrence_type, "
-            " recurrence_rule, shame_after_days, due_date, active) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            " recurrence_rule, shame_after_days, due_date, "
+            " object, qualifier, active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
             (
                 id,
                 title,
@@ -88,11 +96,14 @@ class ChoreStore:
                 json.dumps(recurrence_rule),
                 shame_after_days,
                 due_date,
+                object,
+                qualifier,
             ),
         )
         log.info(
             "chore_added",
-            id=id, assignee=assignee, recurrence_type=recurrence_type, due_date=due_date,
+            id=id, assignee=assignee, recurrence_type=recurrence_type,
+            due_date=due_date, object=object, qualifier=qualifier,
         )
         chore = await self.get_chore(id)
         assert chore is not None
@@ -120,6 +131,7 @@ class ChoreStore:
         allowed = {
             "title", "description", "assignee", "recurrence_type",
             "recurrence_rule", "shame_after_days", "active", "due_date",
+            "object", "qualifier",
         }
         sets: list[str] = []
         params: list[Any] = []
@@ -257,6 +269,8 @@ def _row_to_chore(row: dict[str, Any]) -> Chore:
         active=bool(row["active"]),
         created_at=row["created_at"],
         due_date=_row_get(row, "due_date"),
+        object=_row_get(row, "object"),
+        qualifier=_row_get(row, "qualifier"),
     )
 
 

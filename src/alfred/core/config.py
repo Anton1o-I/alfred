@@ -53,6 +53,10 @@ class RecipientConfig(BaseModel):
     phone: str | None = None
     email: str | None = None
     email_env: str | None = None  # If set, takes precedence over `email` (env-var indirection)
+    # Display name — used by agents that need to resolve name references
+    # back to a user_id (e.g. "assign to <name>" → primary). Sourced via
+    # env var to keep personal names out of tracked config.
+    name_env: str | None = None
     # Which agents this recipient receives emails from. Empty list → all agents
     # (default). Set to e.g. ["calendar"] to only receive calendar-driven sends
     # (daily briefing, weekly preview) and skip the research curator digest.

@@ -33,24 +33,60 @@ tracer = trace.get_tracer("alfred.tasks.workflow")
 
 _OI_SPAN_KIND = "openinference.span.kind"
 
-# Filler words filtered out of titles before keyword matching.
-_DEDUP_STOPWORDS = {
-    "the", "a", "an", "and", "or", "for", "with", "from", "this", "that",
-    "my", "your", "our", "on", "at", "in", "to", "of", "is", "i", "me", "we",
-    "add", "create", "new", "chore", "task", "remind", "reminder",
-    "every", "each", "weekly", "daily", "monthly", "yearly",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
-    "household", "primary", "secondary",
-}
+def _norm_shape(s: str | None) -> str | None:
+    """Lowercase + strip shape fields for deterministic comparison."""
+    if not s:
+        return None
+    out = s.strip().lower()
+    return out or None
 
 
-def _extract_meaningful_words(text: str) -> set[str]:
-    return {
-        w
-        for w in re.findall(r"\b[a-z]{3,}\b", (text or "").lower())
-        if w not in _DEDUP_STOPWORDS
-    }
+def _shape_verdict(
+    new_obj: str | None,
+    new_qual: str | None,
+    ex_obj: str | None,
+    ex_qual: str | None,
+) -> str:
+    """Pure-code dedup comparison. Returns 'high' | 'medium' | 'none'.
+
+    Truth table (after _norm_shape):
+      different object               → none
+      same object, both qualifiers, same → high
+      same object, both qualifiers, diff → none
+      same object, one qualified, one not → medium
+      same object, neither qualified → high
+    """
+    if not new_obj or not ex_obj:
+        return "none"
+    if new_obj != ex_obj:
+        return "none"
+    if new_qual and ex_qual:
+        return "high" if new_qual == ex_qual else "none"
+    if new_qual or ex_qual:
+        return "medium"
+    return "high"
+
+
+def _shape_reason(
+    new_title: str,
+    ex_title: str,
+    new_obj: str | None,
+    new_qual: str | None,
+    ex_obj: str | None,
+    ex_qual: str | None,
+    verdict: str,
+) -> str:
+    """One-sentence explanation for the user/log."""
+    if verdict == "high":
+        return f"'{new_title}' is the same chore as '{ex_title}' (same target)."
+    if verdict == "medium":
+        unq = new_title if not new_qual else ex_title
+        q = ex_title if not new_qual else new_title
+        return (
+            f"'{unq}' might be the same chore as '{q}' — one of them is more "
+            "specific. Reply to confirm or split them apart."
+        )
+    return f"'{new_title}' and '{ex_title}' target different things."
 
 
 def _slugify(s: str) -> str:
@@ -192,6 +228,24 @@ class ChoreDraft(BaseModel):
     shame_after_days: int | None = Field(
         default=None,
         description="Days overdue before public shame kicks in. Defaults to 3.",
+    )
+    object: str | None = Field(
+        default=None,
+        description=(
+            "The single noun the chore acts on, lowercase, singular. "
+            "Examples: 'trash' for 'Take out trash', 'bathroom' for 'Clean main bathroom', "
+            "'lawn' for 'Mow lawn', 'plants' for 'Water plants'. Leave null if the "
+            "title isn't a clean verb-noun shape."
+        ),
+    )
+    qualifier: str | None = Field(
+        default=None,
+        description=(
+            "Modifier that distinguishes WHICH instance of the object. Lowercase. "
+            "Examples: 'main' for 'Clean main bathroom', 'kitchen' for 'Wipe kitchen "
+            "counters', 'front' for 'Sweep front porch'. Leave null when the chore "
+            "doesn't single out one instance (e.g. 'Take out trash' has no qualifier)."
+        ),
     )
 
 
@@ -347,8 +401,10 @@ _PARSE_PROMPT = (
     "  plants', 'Mow lawn', 'Pick up dry cleaning'.\n"
     "  Bad examples: 'Take out the trash', 'clean downstairs bathroom', "
     "  'Clean Kitchen Countertops', 'TRASH'.\n"
-    "- assignee: 'household' (default) if either spouse can do it; 'primary' "
-    "  or 'secondary' only if the user explicitly names a person.\n"
+    "- assignee: 'household' (default) if either spouse can do it. Use "
+    "  'primary' or 'secondary' when the user names a specific person — "
+    "  resolve the name using the mapping below.\n"
+    "{name_mapping_block}"
     "- recurrence_type:\n"
     "    'schedule' when anchored to days ('every Tuesday', 'weekly');\n"
     "    'completion' when anchored to elapsed time since last done "
@@ -358,13 +414,43 @@ _PARSE_PROMPT = (
     "  Default to 'schedule' when unsure for recurring; default to 'once' "
     "  when a single specific date is given.\n"
     "- recurrence.frequency: DAILY/WEEKLY/MONTHLY/YEARLY (only for recurring).\n"
-    "- recurrence.interval: defaults to 1. Use 2 for 'every other'.\n"
+    "- recurrence.interval: how many of those frequency units between runs. "
+    "  Default 1. CRITICAL: when the user says 'every N <unit>', interval=N.\n"
+    "    'every 2 days' → frequency=DAILY, interval=2\n"
+    "    'every 3 weeks' → frequency=WEEKLY, interval=3\n"
+    "    'every other Saturday' → frequency=WEEKLY, interval=2, byday=[SA]\n"
+    "    'every 6 months' → frequency=MONTHLY, interval=6\n"
+    "    'weekly' / 'every week' → frequency=WEEKLY, interval=1\n"
+    "  Do NOT collapse 'every 2 days' to interval=1 — the number is load-bearing.\n"
     "- recurrence.byday: two-letter codes for weekly day-of-week patterns "
     "  (MO TU WE TH FR SA SU). Leave empty for non-weekly or unspecified.\n"
     "- due_date_iso: ISO date (YYYY-MM-DD) for one-time tasks. Resolve "
     "  relative phrases ('next Friday', 'tomorrow', 'this Saturday') using "
     "  today's date above.\n"
     "- shame_after_days: only set if the user explicitly says so.\n"
+    "- object: the single noun the chore acts on. Lowercase, singular. "
+    "  This is the THING being acted on, not the verb.\n"
+    "    'Take out trash' → object='trash'\n"
+    "    'Clean main bathroom' → object='bathroom'\n"
+    "    'Clean hallway bathroom' → object='bathroom'\n"
+    "    'Wipe kitchen counters' → object='counters'\n"
+    "    'Mow lawn' → object='lawn'\n"
+    "    'Water plants' → object='plants'\n"
+    "    'Pick up dry cleaning' → object='dry cleaning'\n"
+    "  Leave null only if the title doesn't have a clean verb-noun shape.\n"
+    "- qualifier: the modifier that distinguishes WHICH instance of the "
+    "  object. Lowercase. Leave null when there's no distinguishing modifier.\n"
+    "    'Take out trash' → qualifier=null\n"
+    "    'Clean main bathroom' → qualifier='main'\n"
+    "    'Clean hallway bathroom' → qualifier='hallway'\n"
+    "    'Clean kids bathroom' → qualifier='kids'\n"
+    "    'Wipe kitchen counters' → qualifier='kitchen'\n"
+    "    'Sweep front porch' → qualifier='front'\n"
+    "    'Mow lawn' → qualifier=null\n"
+    "  CRITICAL: when the user names a SPECIFIC instance (main/hallway/"
+    "  master/kids/front/back/upstairs/downstairs/kitchen), put it here. "
+    "  Two chores with different qualifiers are different chores even if "
+    "  they share an object.\n"
     "\n"
     "Leave fields null when the user didn't say. Do not invent values.\n"
     "If the user did not describe a chore at all (e.g. just said 'hi'), "
@@ -409,6 +495,10 @@ _DEDUP_PROMPT = (
     "rooms, or fixtures, they are NOT duplicates regardless of how similar "
     "the wording sounds. Only flag duplicates when the underlying work is "
     "the same on the same target.\n"
+    "\n"
+    "Quick test: strip the leading verb. If each remaining title has at "
+    "least one distinctive word the other doesn't (e.g. 'main' vs "
+    "'hallway', 'counters' vs nothing-specific), they're DIFFERENT chores.\n"
     "\n"
     "Reasoning should be one short sentence — it gets shown to the user."
 )
@@ -468,7 +558,9 @@ _UPDATE_PARSE_PROMPT = (
     "- Set new_* fields ONLY for what the user explicitly wants to change. "
     "Leave others null.\n"
     "- new_recurrence_type / new_recurrence: only if the user changes the schedule.\n"
-    "- new_assignee: one of 'household', 'primary', 'secondary' if the user reassigns.\n"
+    "- new_assignee: one of 'household', 'primary', 'secondary' if the user "
+    "  reassigns — resolve named people via the mapping below.\n"
+    "{name_mapping_block}"
     "\n"
     "Email body:\n"
     "{email_body}"
@@ -476,6 +568,55 @@ _UPDATE_PARSE_PROMPT = (
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _format_recurrence_human(rule: dict[str, Any], rec_type: str) -> str:
+    """Render a recurrence rule + type as readable text for replies.
+
+    Examples:
+      ({freq: DAILY, interval: 2}, 'completion') → 'every 2 days (completion-based)'
+      ({freq: WEEKLY, byday: [TU]}, 'schedule')  → 'weekly on TU (schedule-based)'
+      ({freq: WEEKLY, interval: 2, byday: [SA]}, 'schedule')
+          → 'every 2 weeks on SA (schedule-based)'
+    """
+    freq = (rule.get("frequency") or "").upper()
+    interval = int(rule.get("interval") or 1)
+    byday = ",".join(rule.get("byday") or [])
+    unit = {
+        "DAILY": "day",
+        "WEEKLY": "week",
+        "MONTHLY": "month",
+        "YEARLY": "year",
+    }.get(freq, freq.lower() or "cycle")
+    if interval == 1:
+        base = {"DAILY": "daily", "WEEKLY": "weekly", "MONTHLY": "monthly", "YEARLY": "yearly"}.get(
+            freq, freq.lower() or "every cycle"
+        )
+    else:
+        base = f"every {interval} {unit}s"
+    if byday:
+        base += f" on {byday}"
+    return f"{base} ({rec_type}-based)"
+
+
+def _name_mapping_block(name_map: dict[str, str]) -> str:
+    """Render a 'primary = <name>, secondary = <name>' hint into the prompt.
+
+    Returns an empty string when no names are configured — the model then
+    falls back to literal household/primary/secondary classification.
+    """
+    if not name_map:
+        return ""
+    lines = ["  Name → user_id mapping:"]
+    for uid in ("primary", "secondary"):
+        if uid in name_map:
+            lines.append(f"    • '{name_map[uid]}' → {uid}")
+    lines.append(
+        "  When the user names one of these people, set assignee to the "
+        "matching user_id. Treat case-insensitive matches and common "
+        "shortenings as a match."
+    )
+    return "\n".join(lines) + "\n"
 
 
 def _make_specialist(
@@ -532,8 +673,16 @@ def build_tasks_graph(
     litellm_client: LiteLLMClient,
     model_name: str = "local-default",
     now_fn: Any = None,
+    assignee_names: dict[str, str] | None = None,
 ) -> Any:
-    """Compile the tasks workflow with deps closed over."""
+    """Compile the tasks workflow with deps closed over.
+
+    `assignee_names` maps user_id → display name (e.g. {'primary': 'Alex',
+    'secondary': 'Sam'}). When set, the parse prompt teaches the model to
+    resolve natural-language references like 'assign to <name>' back to the
+    canonical user_id slot.
+    """
+    name_map = assignee_names or {}
     intent_agent = _make_specialist(litellm_client, model_name, IntentClassification)
     parse_local = _make_specialist(litellm_client, model_name, ChoreDraft)
     parse_cloud = _make_specialist(litellm_client, "cloud-default", ChoreDraft)
@@ -565,6 +714,8 @@ def build_tasks_graph(
                 "assignee": c.assignee,
                 "recurrence_type": c.recurrence_type,
                 "recurrence_rule": c.recurrence_rule,
+                "object": c.object,
+                "qualifier": c.qualifier,
             }
             for c in active
         ]
@@ -597,6 +748,7 @@ def build_tasks_graph(
             today_day_of_week=state["today_day_of_week"],
             today_iso=state["today_iso"],
             timezone_name=state["timezone_name"],
+            name_mapping_block=_name_mapping_block(name_map),
             email_body=state["email_body"],
         )
         pool, model_label = _pick_pool(state)
@@ -634,7 +786,15 @@ def build_tasks_graph(
             }
 
     async def check_for_duplicates(state: TasksState) -> dict:
-        """Semantic dedup with a keyword slam-dunk pre-filter."""
+        """Dedup — code-side shape comparison first, LLM fallback for legacy.
+
+        Modern parses produce a structured (object, qualifier) shape on
+        every chore. When both the new draft AND every existing active
+        chore have shape data, comparison is pure code and deterministic.
+        When any side is missing shape data (legacy chores from before
+        migration 005), fall back to the LLM-based comparison so we don't
+        regress on existing data.
+        """
         draft = state.get("parsed_chore") or {}
         existing = state.get("active_chores") or []
         new_title = draft.get("title") or ""
@@ -648,56 +808,63 @@ def build_tasks_graph(
                 }
             }
 
-        # Keyword pre-filter: existing chore whose title shares all meaningful
-        # words with the new title is a slam-dunk duplicate.
-        new_words = _extract_meaningful_words(new_title)
-        keyword_hits: list[dict] = []
-        if new_words:
+        # Code-side shape comparison.
+        new_obj = _norm_shape(draft.get("object"))
+        new_qual = _norm_shape(draft.get("qualifier"))
+        if new_obj and all(c.get("object") for c in existing):
+            best: tuple[str, str | None, str] | None = None  # (confidence, chore_id, reason)
+            # Rank: high > medium > none. Stop early on a high.
+            rank = {"high": 2, "medium": 1, "none": 0}
             for c in existing:
-                ex_words = _extract_meaningful_words(c.get("title") or "")
-                if new_words and new_words.issubset(ex_words):
-                    keyword_hits.append(c)
-
-        if len(keyword_hits) == 1:
-            hit = keyword_hits[0]
+                ex_obj = _norm_shape(c.get("object"))
+                ex_qual = _norm_shape(c.get("qualifier"))
+                verdict = _shape_verdict(new_obj, new_qual, ex_obj, ex_qual)
+                if verdict == "none":
+                    continue
+                reason = _shape_reason(
+                    new_title, c.get("title", c["id"]),
+                    new_obj, new_qual, ex_obj, ex_qual, verdict,
+                )
+                candidate = (verdict, c["id"], reason)
+                if best is None or rank[verdict] > rank[best[0]]:
+                    best = candidate
+                if verdict == "high":
+                    break
+            if best is None:
+                log.info(
+                    "tasks_dedup_code_decision",
+                    confidence="none",
+                    new_object=new_obj, new_qualifier=new_qual,
+                )
+                return {
+                    "duplicate_check": {
+                        "confidence": "none",
+                        "existing_chore_id": None,
+                        "reasoning": "No existing chore shares this object+qualifier.",
+                    }
+                }
             log.info(
-                "tasks_dedup_slam_dunk",
-                existing_id=hit["id"],
-                new_title=new_title,
+                "tasks_dedup_code_decision",
+                confidence=best[0],
+                existing_id=best[1],
+                new_object=new_obj, new_qualifier=new_qual,
             )
             return {
                 "duplicate_check": {
-                    "confidence": "high",
-                    "existing_chore_id": hit["id"],
-                    "reasoning": (
-                        f"'{new_title}' looks like the same chore as the "
-                        f"existing '{hit['title']}'."
-                    ),
+                    "confidence": best[0],
+                    "existing_chore_id": best[1],
+                    "reasoning": best[2],
                 }
             }
 
-        # Code-side "distinct objects" rule. Imperative titles take the form
-        # "<verb> <qualifier(s)> <object>". If the proposed and an existing
-        # title BOTH have at least one non-overlapping word after the first
-        # (verb) position, they're targeting physically different things —
-        # e.g. "Clean hallway bathroom" vs "Clean main bathroom". Build the
-        # set of existing chore IDs we should pre-filter away from the LLM
-        # decision.
-        new_post_verb = _extract_meaningful_words(
-            " ".join(new_title.split()[1:])
-        ) if new_title.split() else set()
-        distinct_ids: set[str] = set()
-        for c in existing:
-            ex_title = c.get("title") or ""
-            ex_post_verb = _extract_meaningful_words(
-                " ".join(ex_title.split()[1:])
-            ) if ex_title.split() else set()
-            new_only = new_post_verb - ex_post_verb
-            existing_only = ex_post_verb - new_post_verb
-            if new_only and existing_only:
-                distinct_ids.add(c["id"])
-
-        # LLM specialist for the remaining ambiguous cases.
+        # Fallback: at least one chore is missing structured shape data
+        # (legacy DB row from before migration 005). Use the LLM.
+        log.info(
+            "tasks_dedup_llm_fallback",
+            reason="missing_shape_on_new_or_existing",
+            new_has_object=bool(new_obj),
+            existing_missing_shape=sum(1 for c in existing if not c.get("object")),
+        )
         rec = draft.get("recurrence") or {}
         new_rec_desc = (
             f"{(rec.get('frequency') or '?').lower()}"
@@ -715,66 +882,21 @@ def build_tasks_graph(
             result = await agent.run(prompt)
             usage = result.usage()
             decision = result.output
-            confidence = decision.confidence
-            existing_id = decision.existing_chore_id
-            reasoning = decision.reasoning
-            in_tok = usage.input_tokens or 0
-            out_tok = usage.output_tokens or 0
-
-            # Tiebreaker: if the local model says these are the same but our
-            # structural rule says they're physically different things, the
-            # local model is probably wrong. Ask the cloud model to break
-            # the tie. (Cloud-pool runs skip this — they already got the
-            # better model on the first pass.)
-            structural_conflict = (
-                pool == "local"
-                and confidence in {"high", "medium"}
-                and existing_id in distinct_ids
-            )
-            if structural_conflict:
-                log.info(
-                    "tasks_dedup_cloud_tiebreaker",
-                    local_confidence=confidence,
-                    existing_id=existing_id,
-                    reason="structural_rule_says_distinct",
-                )
-                try:
-                    cloud_result = await dedup_cloud.run(prompt)
-                    cloud_usage = cloud_result.usage()
-                    cloud_decision = cloud_result.output
-                    in_tok += cloud_usage.input_tokens or 0
-                    out_tok += cloud_usage.output_tokens or 0
-                    confidence = cloud_decision.confidence
-                    existing_id = cloud_decision.existing_chore_id
-                    reasoning = f"[cloud tiebreaker] {cloud_decision.reasoning}"
-                    model_label = "cloud-default (tiebreak)"
-                except Exception as e:  # noqa: BLE001
-                    # Cloud unavailable — fall back to the structural rule
-                    # itself: trust the deterministic signal that these are
-                    # distinct chores.
-                    log.warning("tasks_dedup_cloud_tiebreaker_failed", error=str(e))
-                    confidence = "none"
-                    existing_id = None
-                    reasoning = (
-                        "Distinct targets — different qualifiers after the verb "
-                        "(e.g. 'main' vs 'hallway') indicate different chores."
-                    )
-
             log.info(
                 "tasks_dedup_decision",
-                confidence=confidence,
-                existing_id=existing_id,
-                reasoning=reasoning[:120],
+                confidence=decision.confidence,
+                existing_id=decision.existing_chore_id,
+                reasoning=decision.reasoning[:120],
                 model=model_label,
             )
             return {
                 "duplicate_check": {
-                    "confidence": confidence,
-                    "existing_chore_id": existing_id,
-                    "reasoning": reasoning,
+                    "confidence": decision.confidence,
+                    "existing_chore_id": decision.existing_chore_id,
+                    "reasoning": decision.reasoning,
                 },
-                "input_tokens": state.get("input_tokens", 0) + in_tok,
-                "output_tokens": state.get("output_tokens", 0) + out_tok,
+                "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
+                "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
             }
         except Exception as e:  # noqa: BLE001
             log.error("tasks_dedup_failed", error=str(e))
@@ -833,6 +955,17 @@ def build_tasks_graph(
         rec_rule = dict(draft.get("recurrence") or {})
         shame = draft.get("shame_after_days") or 3
         due_date = draft.get("due_date_iso") if rec_type == "once" else None
+        obj = (draft.get("object") or None)
+        if isinstance(obj, str):
+            obj = obj.strip().lower() or None
+        qual = (draft.get("qualifier") or None)
+        if isinstance(qual, str):
+            qual = qual.strip().lower() or None
+        log.info(
+            "tasks_write_chore_start",
+            chore_id=chore_id, title=title, assignee=assignee,
+            object=obj, qualifier=qual,
+        )
         try:
             chore = await store.add_chore(
                 id=chore_id,
@@ -843,7 +976,10 @@ def build_tasks_graph(
                 recurrence_rule=rec_rule,
                 shame_after_days=shame,
                 due_date=due_date,
+                object=obj,
+                qualifier=qual,
             )
+            log.info("tasks_write_chore_done", chore_id=chore.id)
             return {
                 "created_chore": {
                     "id": chore.id,
@@ -853,6 +989,8 @@ def build_tasks_graph(
                     "recurrence_rule": chore.recurrence_rule,
                     "shame_after_days": chore.shame_after_days,
                     "due_date": chore.due_date,
+                    "object": chore.object,
+                    "qualifier": chore.qualifier,
                 },
                 "outcome": "created",
             }
@@ -907,7 +1045,11 @@ def build_tasks_graph(
             }
 
     async def reason_about_target_match(state: TasksState) -> dict:
-        """Slam-dunk keyword pass first; LLM specialist for ambiguous cases."""
+        """Match the user's natural-language reference to one active chore.
+
+        Direct id match short-circuits (free, deterministic). Everything
+        else goes to the LLM specialist with all candidates.
+        """
         action = state.get("action", "")
         existing = state.get("active_chores") or []
         target = state.get("target_reference") or {}
@@ -922,7 +1064,7 @@ def build_tasks_graph(
                 }
             }
 
-        # Direct id match — user said the slug.
+        # Direct id match — user said the slug. Free deterministic shortcut.
         ref_lower = reference.lower().strip()
         for c in existing:
             if c["id"] == ref_lower:
@@ -934,34 +1076,6 @@ def build_tasks_graph(
                     }
                 }
 
-        # Keyword pre-filter — exactly one chore whose title shares all of
-        # the user's meaningful words → slam-dunk high confidence.
-        ref_words = _extract_meaningful_words(reference)
-        keyword_hits: list[dict] = []
-        if ref_words:
-            for c in existing:
-                title_words = _extract_meaningful_words(c.get("title") or "")
-                if ref_words.issubset(title_words):
-                    keyword_hits.append(c)
-
-        if len(keyword_hits) == 1 and ref_words:
-            hit = keyword_hits[0]
-            log.info(
-                "tasks_target_slam_dunk",
-                chore_id=hit["id"],
-                reference=reference,
-            )
-            return {
-                "target_match": {
-                    "confidence": "high",
-                    "chore_id": hit["id"],
-                    "reasoning": (
-                        f"Single match: '{reference}' clearly refers to '{hit['title']}'."
-                    ),
-                }
-            }
-
-        # LLM specialist
         lines = []
         for c in existing:
             lines.append(
@@ -979,27 +1093,18 @@ def build_tasks_graph(
             result = await agent.run(prompt)
             usage = result.usage()
             decision = result.output
-            confidence = decision.confidence
-            reasoning = decision.reasoning
-            # Downgrade overconfident "high" when multiple equal keyword hits
-            if confidence == "high" and len(keyword_hits) > 1:
-                confidence = "medium"
-                reasoning = (
-                    reasoning
-                    + f" (Multiple chores match — {len(keyword_hits)} candidates.)"
-                )
             log.info(
                 "tasks_target_decision",
                 action=action,
-                confidence=confidence,
+                confidence=decision.confidence,
                 chore_id=(decision.chore_id or ""),
                 model=model_label,
             )
             return {
                 "target_match": {
-                    "confidence": confidence,
+                    "confidence": decision.confidence,
                     "chore_id": decision.chore_id,
-                    "reasoning": reasoning,
+                    "reasoning": decision.reasoning,
                 },
                 "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
                 "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
@@ -1103,6 +1208,7 @@ def build_tasks_graph(
             today_day_of_week=state.get("today_day_of_week", ""),
             today_iso=state.get("today_iso", ""),
             timezone_name=state.get("timezone_name", ""),
+            name_mapping_block=_name_mapping_block(name_map),
             email_body=state["email_body"],
         )
         pool, model_label = _pick_pool(state)
@@ -1190,16 +1296,46 @@ def build_tasks_graph(
 
         outcome = state.get("outcome", "clarification")
 
+        # Guard against stale-state UX bugs: if a side-effect node populated
+        # one of the result dicts (created_chore / completed_chore / etc.)
+        # but `outcome` ended up empty or pointing at a clarification branch,
+        # always render the success reply that matches the populated dict.
+        # Mirrors the symptom the user hit where a chore was written but the
+        # email reply still said "Need more information".
+        result_outcomes = {
+            "created_chore": "created",
+            "completed_chore": "completed",
+            "deleted_chore": "deleted",
+            "updated_chore": "updated",
+        }
+        for key, success in result_outcomes.items():
+            if state.get(key) and outcome != success:
+                log.warning(
+                    "tasks_build_reply_outcome_mismatch",
+                    populated=key,
+                    state_outcome=outcome,
+                    rendering_as=success,
+                )
+                outcome = success
+                break
+
+        log.info(
+            "tasks_build_reply",
+            outcome=outcome,
+            has_created=bool(state.get("created_chore")),
+            has_completed=bool(state.get("completed_chore")),
+            has_deleted=bool(state.get("deleted_chore")),
+            has_updated=bool(state.get("updated_chore")),
+        )
+
         if outcome == "created":
             c = state["created_chore"]
             if c["recurrence_type"] == "once":
                 when = f"due {c.get('due_date') or '?'} (one-time)"
             else:
-                rule = c.get("recurrence_rule") or {}
-                freq = (rule.get("frequency") or "").lower()
-                byday = ",".join(rule.get("byday") or [])
-                when = freq + (f" on {byday}" if byday else "")
-                when += f" ({c['recurrence_type']}-based)"
+                when = _format_recurrence_human(
+                    c.get("recurrence_rule") or {}, c["recurrence_type"]
+                )
             txt = (
                 f"Added chore '{c['title']}' (id: {c['id']})\n"
                 f"  • assignee: {c['assignee']}\n"
@@ -1266,14 +1402,13 @@ def build_tasks_graph(
         if outcome == "updated":
             c = state["updated_chore"]
             changes = ", ".join(c.get("changed_fields", [])) or "(none)"
-            rule = c.get("recurrence_rule") or {}
-            freq = (rule.get("frequency") or "").lower()
-            byday = ",".join(rule.get("byday") or [])
-            when = freq + (f" on {byday}" if byday else "")
+            when = _format_recurrence_human(
+                c.get("recurrence_rule") or {}, c["recurrence_type"]
+            )
             txt = (
                 f"Updated '{c['title']}' (id: {c['id']}). Changed: {changes}.\n"
                 f"  • assignee: {c['assignee']}\n"
-                f"  • recurrence: {when} ({c['recurrence_type']}-based)\n"
+                f"  • recurrence: {when}\n"
                 f"  • shame after: {c['shame_after_days']} days overdue"
             )
             return {

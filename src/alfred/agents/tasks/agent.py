@@ -32,6 +32,7 @@ class TasksAgent(AgentBase):
         notification_service: Any = None,  # noqa: ARG002 — registry signature compat
         timezone_name: str = "UTC",
         now_fn: Any = None,
+        assignee_names: dict[str, str] | None = None,
     ) -> None:
         self._db = db
         self._litellm = litellm_client
@@ -42,6 +43,7 @@ class TasksAgent(AgentBase):
             litellm_client=litellm_client,
             model_name="local-default",
             now_fn=now_fn,
+            assignee_names=assignee_names or {},
         )
 
     async def run(self, message: str, context: AgentContext) -> AgentResult:  # noqa: ARG002

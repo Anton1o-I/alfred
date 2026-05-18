@@ -154,24 +154,24 @@
   # tomorrow's Monday. Real-world impact is low — users would just see
   # the wrong date in the reply and correct it.
   email: |
-    Book lunch with Emily Monday, not tomorrow, the next one, 12pm
+    Book lunch with Sam Monday, not tomorrow, the next one, 12pm
   today: "2026-05-17"
   initial_calendar: []
   expect:
     outcome: created
-    event_summary_contains: ["Emily"]
+    event_summary_contains: ["Sam"]
     event_start_iso: "2026-05-25T12:00:00-05:00"
     calendar_count_after: 1
 
 - name: relative_explicit_unambiguous
   # The well-phrased version of the above. Should always pass.
   email: |
-    Book lunch with Emily on May 25 at 12pm
+    Book lunch with Sam on May 25 at 12pm
   today: "2026-05-17"
   initial_calendar: []
   expect:
     outcome: created
-    event_summary_contains: ["Emily"]
+    event_summary_contains: ["Sam"]
     event_start_iso: "2026-05-25T12:00:00-05:00"
     calendar_count_after: 1
 

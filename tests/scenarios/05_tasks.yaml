@@ -64,6 +64,22 @@
     active_count_after: 1
     reply_contains: ["mow"]
 
+- name: create_every_n_days_interval
+  kind: tasks
+  email: |
+    Add a task to pick up dog poop every 2 days. Assign to Alex.
+  today: "2026-05-17"
+  initial_chores: []
+  # Two regressions guarded here:
+  #   1. "every 2 days" must yield interval=2 (not 1) — surfaces as "every 2"
+  #      in the rendered reply.
+  #   2. "Assign to Alex" must resolve to user_id=primary via the name map.
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["primary", "every 2"]
+    reply_excludes: ["secondary", "household"]
+
 # ─────────────────────────────────────────────────────────────────────────
 # CREATE — one-time tasks with a set due date
 # ─────────────────────────────────────────────────────────────────────────
@@ -138,10 +154,12 @@
       assignee: household
       recurrence_type: schedule
       recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+      object: trash
+      qualifier: null
   expect:
     outcome: duplicate_existing
     active_count_after: 1
-    reply_contains: ["already"]
+    reply_contains: ["same chore"]
 
 - name: dedup_main_vs_hallway_bathroom_distinct
   kind: tasks
@@ -154,8 +172,10 @@
       assignee: household
       recurrence_type: schedule
       recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
-  # Both are bathroom-cleaning chores but they target different rooms —
-  # the agent should treat them as distinct, not a duplicate.
+      object: bathroom
+      qualifier: main
+  # Same object (bathroom) + different qualifiers (main vs hallway) →
+  # the code-side comparison must return 'none'.
   expect:
     outcome: created
     active_count_after: 2
@@ -171,6 +191,8 @@
       assignee: primary
       recurrence_type: schedule
       recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SU] }
+      object: bathroom
+      qualifier: master
   expect:
     outcome: created
     active_count_after: 2
@@ -186,11 +208,12 @@
       assignee: household
       recurrence_type: schedule
       recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
-  # Both describe cleaning the SAME room — should be flagged as duplicate
-  # despite the verb difference ("wipe down" vs "clean").
+      object: bathroom
+      qualifier: main
+  # Same object + same qualifier — code returns 'high'.
   expect:
     active_count_after: 1
-    reply_contains: ["already"]
+    reply_contains: ["same chore"]
 
 - name: dedup_kitchen_vs_kitchen_counters_distinct
   kind: tasks
@@ -203,10 +226,50 @@
       assignee: household
       recurrence_type: schedule
       recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
-  # Daily counter wipe is genuinely different from a weekly deep clean.
+      object: kitchen
+      qualifier: null
+  # Different objects (kitchen vs counters) → code returns 'none'.
   expect:
     outcome: created
     active_count_after: 2
+
+- name: dedup_qualified_vs_unqualified_same_object_medium
+  kind: tasks
+  email: |
+    Add: clean the main bathroom every Saturday, household.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-bathroom
+      title: "Clean bathroom"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+      object: bathroom
+      qualifier: null
+  # Same object, one qualified ('main'), one not → code returns 'medium',
+  # workflow renders the "needs confirmation" reply, no new chore written.
+  expect:
+    outcome: duplicate_needs_confirmation
+    active_count_after: 1
+    reply_contains: ["might be the same"]
+
+- name: dedup_legacy_no_shape_falls_back_to_llm
+  kind: tasks
+  email: |
+    Add: clean the main bathroom every Saturday, household.
+  today: "2026-05-17"
+  # Existing chore has NO object/qualifier (simulates a row created before
+  # migration 005). Code path must fall back to the LLM dedup specialist.
+  initial_chores:
+    - id: clean-main-bathroom
+      title: "Clean main bathroom"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    # The LLM should recognize the paraphrase and flag it.
+    active_count_after: 1
+    reply_contains: ["already"]
 
 # ─────────────────────────────────────────────────────────────────────────
 # COMPLETE — marking chores done

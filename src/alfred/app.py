@@ -303,11 +303,21 @@ def _register_agents(
             from alfred.agents.tasks.agent import TasksAgent
 
             tz_name = CalendarConfig(config_dir).timezone
+            # Build user_id → display name map from recipient configs so the
+            # tasks workflow can resolve natural-language assignee references
+            # ("assign to <name>") back to the canonical user_id.
+            assignee_names: dict[str, str] = {}
+            for r in settings.notifications.recipients:
+                if r.name_env:
+                    name = os.environ.get(r.name_env, "").strip()
+                    if name:
+                        assignee_names[r.user_id] = name
             agent = TasksAgent(
                 db=db,
                 litellm_client=litellm_client,
                 notification_service=notification_service,
                 timezone_name=tz_name,
+                assignee_names=assignee_names,
             )
             registry.register(agent, tasks_config)
         except Exception as e:
