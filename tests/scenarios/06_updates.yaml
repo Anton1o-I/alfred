@@ -1,0 +1,105 @@
+# Update scenarios. The workflow uses LLM reasoning to (a) classify the
+# intent as "update", (b) parse target + proposed change, (c) match an
+# existing event, and (d) PUT-PATCH the chosen event via update_event.
+#
+# Mirrors the delete scenarios' confidence ladder: high → update.
+# medium → ask for confirmation. low/none → "couldn't find it".
+
+- name: update_move_time
+  email: |
+    Move my standup tomorrow to 4pm.
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Standup"
+      start: "2026-05-18T15:00:00-05:00"
+      end:   "2026-05-18T16:00:00-05:00"
+  expect:
+    outcome: updated
+    calendar_count_after: 1
+    reply_contains: ["updated"]
+
+- name: update_rename
+  email: |
+    Rename the dentist appointment on May 22 to "Dental checkup".
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Dentist appointment"
+      start: "2026-05-22T10:00:00-05:00"
+      end:   "2026-05-22T11:00:00-05:00"
+  expect:
+    outcome: updated
+    calendar_count_after: 1
+    reply_contains: ["updated"]
+
+- name: update_relocate
+  email: |
+    Change the lunch with Sarah on Tuesday to Cafe Luna.
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Lunch with Sarah"
+      start: "2026-05-19T12:00:00-05:00"
+      end:   "2026-05-19T13:00:00-05:00"
+      location: "Office cafeteria"
+  expect:
+    outcome: updated
+    calendar_count_after: 1
+    reply_contains: ["updated"]
+
+- name: update_ambiguous_two_matches
+  email: |
+    Move my lunch tomorrow to 1pm.
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Lunch with Sarah"
+      start: "2026-05-18T12:00:00-05:00"
+      end:   "2026-05-18T13:00:00-05:00"
+    - title: "Lunch with Sam"
+      start: "2026-05-18T12:30:00-05:00"
+      end:   "2026-05-18T13:30:00-05:00"
+  # Two plausible "lunches" tomorrow — the agent should NOT auto-update.
+  expect:
+    calendar_count_after: 2
+    reply_excludes: ["Event updated"]
+
+- name: update_not_found
+  email: |
+    Move my dentist appointment on Friday to 3pm.
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Lunch with Sarah"
+      start: "2026-05-22T12:00:00-05:00"
+      end:   "2026-05-22T13:00:00-05:00"
+  expect:
+    outcome: update_not_found
+    calendar_count_after: 1
+    reply_contains: ["couldn't find"]
+
+- name: update_no_change
+  email: |
+    Update my standup tomorrow.
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Standup"
+      start: "2026-05-18T15:00:00-05:00"
+      end:   "2026-05-18T16:00:00-05:00"
+  # The user said "update" but gave no new field — should ask what to change.
+  expect:
+    outcome: update_no_change
+    calendar_count_after: 1
+    reply_contains: ["change"]
+
+- name: update_recurring_warning
+  email: |
+    Move my weekly team meeting on Tuesday to 11am.
+  today: "2026-05-17"
+  initial_calendar:
+    - title: "Team meeting"
+      start: "2026-05-19T10:00:00-05:00"
+      end:   "2026-05-19T11:00:00-05:00"
+      # The sim's in-memory client stores `recurrence` flat on the event;
+      # the update node carries it into updated_event.is_recurring so the
+      # reply can warn the user that the whole series is being updated.
+      description: "Recurring weekly"
+  expect:
+    outcome: updated
+    calendar_count_after: 1

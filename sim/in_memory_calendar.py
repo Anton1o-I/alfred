@@ -127,6 +127,30 @@ class InMemoryCalendarClient:
         self._events.append(ev)
         return ev
 
+    def update_event(self, event_uid: str, *, patch: Any) -> dict[str, Any]:
+        """In-memory analog of IcloudCalendarClient.update_event.
+
+        Accepts the same `EventPatch` shape (duck-typed to avoid the
+        circular import between the sim package and the icloud client).
+        Raises LookupError when the UID is unknown.
+        """
+        if hasattr(patch, "is_empty") and patch.is_empty():
+            raise ValueError("EventPatch has no fields set")
+        target = next((e for e in self._events if e.get("id") == event_uid), None)
+        if target is None:
+            raise LookupError(f"event uid not found: {event_uid}")
+        if getattr(patch, "summary", None) is not None:
+            target["summary"] = patch.summary
+        if getattr(patch, "start", None) is not None:
+            target["start"] = {"dateTime": patch.start.isoformat()}
+        if getattr(patch, "end", None) is not None:
+            target["end"] = {"dateTime": patch.end.isoformat()}
+        if getattr(patch, "location", None) is not None:
+            target["location"] = patch.location
+        if getattr(patch, "description", None) is not None:
+            target["description"] = patch.description
+        return target
+
     def delete_event(self, event_uid: str) -> bool:
         before = len(self._events)
         self._events = [e for e in self._events if e.get("id") != event_uid]

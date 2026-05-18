@@ -49,6 +49,10 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from alfred.agents.calendar.icloud_client import EventPatch
+from alfred.agents.calendar.outcomes import Outcome
+from alfred.agents.calendar.replies import build_reply_pair
+
 if TYPE_CHECKING:
     from alfred.agents.calendar.google_client import GoogleCalendarClient
     from alfred.agents.calendar.icloud_client import IcloudCalendarClient
@@ -125,7 +129,7 @@ def _traced_node(name: str, fn):
 class IntentClassification(BaseModel):
     """Output of the intent-classifier node."""
 
-    action: Literal["create", "delete", "query", "clarify"] = Field(
+    action: Literal["create", "delete", "update", "query", "clarify"] = Field(
         description="What the user wants to do with the calendar."
     )
     complexity: Literal["simple", "complex"] = Field(
@@ -229,8 +233,79 @@ class DeleteTarget(BaseModel):
     )
 
 
-class DeleteMatchDecision(BaseModel):
-    """Output of the match-reasoning node — which event (if any) to delete."""
+class EventReference(BaseModel):
+    """Reference to an existing calendar event — shared by delete and update."""
+
+    intent_summary: str = Field(
+        description=(
+            "Brief restatement of the target event in the user's own words. "
+            "Examples: 'the meeting with Wayne', 'lunch with Sarah', 'my 3pm'."
+        )
+    )
+    date_hint_iso: str | None = Field(
+        default=None,
+        description=(
+            "ISO date the event is on, if the user specified one. Null if no date hint."
+        ),
+    )
+    time_hint: str | None = Field(
+        default=None,
+        description="Optional time like '3pm' or 'morning'. Null if unspecified.",
+    )
+
+
+class UpdateEventDraft(BaseModel):
+    """Output of the update-parser node — what event to modify and how."""
+
+    target: EventReference = Field(
+        description="Which existing event the user wants to change."
+    )
+    new_start_iso: str | None = Field(
+        default=None,
+        description=(
+            "New start time in ISO 8601 with timezone offset. Set only if the "
+            "user explicitly moves/reschedules the event. Null otherwise."
+        ),
+    )
+    new_end_iso: str | None = Field(
+        default=None,
+        description=(
+            "New end time in ISO 8601 with timezone offset. If the user gives a "
+            "new start but no new end, leave null — the action node will keep the "
+            "existing duration."
+        ),
+    )
+    new_title: str | None = Field(
+        default=None,
+        description="New event title, if the user renames it. Null otherwise.",
+    )
+    new_location: str | None = Field(
+        default=None,
+        description="New event location, if the user relocates it. Null otherwise.",
+    )
+    new_notes: str | None = Field(
+        default=None,
+        description="New free-form notes/description, if the user changes them.",
+    )
+
+    def has_any_change(self) -> bool:
+        return any(
+            v is not None
+            for v in (
+                self.new_start_iso,
+                self.new_end_iso,
+                self.new_title,
+                self.new_location,
+                self.new_notes,
+            )
+        )
+
+
+class EventMatchDecision(BaseModel):
+    """Output of the match-reasoning node — which event (if any) was matched.
+
+    Shared by the delete and update branches via `_reason_about_event_match`.
+    """
 
     confidence: Literal["high", "medium", "low", "none"] = Field(
         description=(
@@ -283,6 +358,15 @@ class CalendarState(TypedDict, total=False):
     match_decision: dict
     deleted_event: dict
 
+    # Update branch
+    update_target: dict  # serialized UpdateEventDraft + flat patch fields for replies
+    updated_event: dict
+
+    # Which intent owns the current match-resolution flow ("delete" | "update").
+    # Set by the parse step so mark_needs_confirmation / mark_*_not_found can
+    # emit the correct outcome string without forking the marker nodes.
+    intent_kind: str
+
     # Final outcome — drives build_reply
     outcome: str  # created | conflict | incomplete | clarification | unsupported | error
     error_message: str
@@ -303,6 +387,9 @@ _INTENT_PROMPT = (
     "Classify the user's email into one of these calendar actions:\n"
     "- create: user wants to schedule a new event\n"
     "- delete: user wants to cancel/remove an existing event\n"
+    "- update: user wants to change/move/rename/relocate an existing event "
+    "(e.g. 'move my 3pm to 4pm', 'change the dentist to Friday', "
+    "'rename my standup to retro', 'move it to the cafe')\n"
     "- query: user wants to see what's on the calendar\n"
     "- clarify: the request is unclear, ambiguous, or outside calendar scope\n"
     "\n"
@@ -337,8 +424,8 @@ _DELETE_PARSE_PROMPT = (
 )
 
 
-_DELETE_MATCH_PROMPT = (
-    "Decide which calendar event the user wants to delete.\n"
+_MATCH_PROMPT = (
+    "Decide which calendar event the user wants to {verb}.\n"
     "\n"
     "User's intent: {intent_summary}\n"
     "Date the user gave: {date_hint}\n"
@@ -353,14 +440,51 @@ _DELETE_MATCH_PROMPT = (
     "\n"
     "Confidence rubric:\n"
     "- high: one clear match. Title, location, OR description directly "
-    "  references something the user said. Proceed with deletion.\n"
+    "  references something the user said. Proceed with the action.\n"
     "- medium: a likely match exists but it's worth confirming with the "
-    "  user before deleting (e.g., only a partial name match, or one of "
+    "  user before acting (e.g., only a partial name match, or one of "
     "  two plausible candidates).\n"
     "- low: multiple weak matches with no clear winner.\n"
     "- none: no candidate plausibly matches.\n"
     "\n"
     "Reasoning should be one short sentence — it gets shown to the user."
+)
+
+
+_UPDATE_PARSE_PROMPT = (
+    "Extract what existing event the user wants to change AND what changes "
+    "they want to make. You only extract the intent + proposed changes — a "
+    "downstream step will look at the actual calendar and decide which event "
+    "matches.\n"
+    "\n"
+    "Today is {today_day_of_week}, {today_iso} ({timezone_name}).\n"
+    "\n"
+    "Upcoming 15 days (use this table to resolve relative dates):\n"
+    "{upcoming_table}\n"
+    "\n"
+    "Rules:\n"
+    "- target.intent_summary: brief restatement of the event in the user's words. "
+    "'Move my 3pm tomorrow to 4pm' -> 'my 3pm'. "
+    "'Rename the dentist appointment to checkup' -> 'the dentist appointment'.\n"
+    "- target.date_hint_iso: ISO date the existing event is on, if mentioned.\n"
+    "- target.time_hint: optional time hint about the existing event.\n"
+    "\n"
+    "New-value fields — set ONLY the ones the user explicitly changes. Leave the "
+    "rest null.\n"
+    "- new_start_iso / new_end_iso: ISO 8601 with timezone offset for {timezone_name}. "
+    "If the user gives a new start but no new end, set new_end_iso=null and the "
+    "system will keep the original duration. If the user moves only the date "
+    "(not time), preserve the existing clock time — but if you can't, set "
+    "new_start_iso to the new date at the user's stated/implied time.\n"
+    "- new_title: only if the user renames the event.\n"
+    "- new_location: only if the user moves it to a new place.\n"
+    "- new_notes: only if the user adds/changes free-form notes.\n"
+    "\n"
+    "If you can't tell what change the user wanted, leave ALL new_* fields null. "
+    "The system will reply asking for clarification.\n"
+    "\n"
+    "Email body:\n"
+    "{email_body}"
 )
 
 
@@ -456,14 +580,6 @@ def _make_specialist(
     )
 
 
-def _format_incomplete_text(issues: list[str]) -> str:
-    return (
-        "I couldn't fully parse your request.\n"
-        "Issues: " + "; ".join(issues) + ".\n\n"
-        "Reply with the full details, e.g. 'Meeting with Eric next Wednesday at 10am'."
-    )
-
-
 def build_calendar_graph(
     calendar_client: CalendarClient,
     timezone_name: str,
@@ -486,8 +602,13 @@ def build_calendar_graph(
     parse_agent_cloud = _make_specialist(litellm_client, "cloud-default", EventDraft)
     delete_parse_local = _make_specialist(litellm_client, model_name, DeleteTarget)
     delete_parse_cloud = _make_specialist(litellm_client, "cloud-default", DeleteTarget)
-    delete_match_local = _make_specialist(litellm_client, model_name, DeleteMatchDecision)
-    delete_match_cloud = _make_specialist(litellm_client, "cloud-default", DeleteMatchDecision)
+    # Match-reasoning is shared between the delete and update branches —
+    # `_reason_about_event_match` runs the same prompt with just the verb
+    # swapped so we don't fork two near-identical specialists.
+    match_agent_local = _make_specialist(litellm_client, model_name, EventMatchDecision)
+    match_agent_cloud = _make_specialist(litellm_client, "cloud-default", EventMatchDecision)
+    update_parse_local = _make_specialist(litellm_client, model_name, UpdateEventDraft)
+    update_parse_cloud = _make_specialist(litellm_client, "cloud-default", UpdateEventDraft)
 
     def _pick_model_label(state: CalendarState) -> tuple[str, str]:
         """Return (specialist_pool_label, model_name_for_logging)."""
@@ -693,14 +814,16 @@ def build_calendar_graph(
             )
             return {
                 "delete_target": target.model_dump(),
+                "intent_kind": "delete",
                 "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
                 "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
             }
         except Exception as e:  # noqa: BLE001
             log.error("calendar_delete_parse_failed", error=str(e))
             return {
-                "outcome": "delete_not_found",
+                "outcome": Outcome.DELETE_NOT_FOUND.value,
                 "error_message": f"parse_error: {e}",
+                "intent_kind": "delete",
             }
 
     async def fetch_candidates_for_delete(state: CalendarState) -> dict:
@@ -739,8 +862,15 @@ def build_calendar_graph(
         )
         return {"matching_events": candidates}
 
-    async def reason_about_delete_match(state: CalendarState) -> dict:
-        """LLM specialist: pick the best match with a confidence rating.
+    async def _reason_about_event_match(
+        state: CalendarState, intent_kind: Literal["delete", "update"]
+    ) -> dict:
+        """Shared matcher used by both the delete and update branches.
+
+        Same prompt, same keyword/slam-dunk heuristics, same overconfidence
+        downgrade — only the verb in the prompt and the source of the
+        target reference change between the two callers. Keeping it one
+        function prevents the delete/update reasoning from drifting apart.
 
         Code-side calibration wraps the LLM:
         - If exactly one candidate's title/location/description contains
@@ -750,10 +880,16 @@ def build_calendar_graph(
           'medium' if more than one candidate equally matches the keywords —
           forces a confirmation when the LLM was overconfident.
         """
-        target = state.get("delete_target") or {}
+        if intent_kind == "delete":
+            target = state.get("delete_target") or {}
+            verb = "delete"
+        else:
+            ut = state.get("update_target") or {}
+            target = ut.get("target") or {}
+            verb = "update"
         candidates = state.get("matching_events") or []
         if not candidates:
-            log.info("calendar_delete_no_candidates")
+            log.info("calendar_match_no_candidates", intent_kind=intent_kind)
             return {
                 "match_decision": {
                     "confidence": "none",
@@ -780,7 +916,8 @@ def build_calendar_graph(
         if len(keyword_matches) == 1 and intent_words:
             m = keyword_matches[0]
             log.info(
-                "calendar_delete_slam_dunk",
+                "calendar_match_slam_dunk",
+                intent_kind=intent_kind,
                 uid=(m.get("id") or "")[:40],
                 intent_words=sorted(intent_words),
             )
@@ -803,14 +940,15 @@ def build_calendar_graph(
             lines.append(
                 f"  - id={c['id']}  '{c['summary']}'  ({c['start']} – {c['end']}){loc}{desc}"
             )
-        prompt = _DELETE_MATCH_PROMPT.format(
+        prompt = _MATCH_PROMPT.format(
+            verb=verb,
             intent_summary=target.get("intent_summary") or "(no summary)",
             date_hint=target.get("date_hint_iso") or "(none given)",
             email_body=state["email_body"],
             candidates_block="\n".join(lines),
         )
         pool, model_label = _pick_model_label(state)
-        match_agent = delete_match_cloud if pool == "cloud" else delete_match_local
+        match_agent = match_agent_cloud if pool == "cloud" else match_agent_local
         try:
             result = await match_agent.run(prompt)
             usage = result.usage()
@@ -822,7 +960,8 @@ def build_calendar_graph(
             # user to confirm rather than deleting the wrong one.
             if confidence == "high" and len(keyword_matches) > 1:
                 log.info(
-                    "calendar_delete_confidence_downgrade",
+                    "calendar_match_confidence_downgrade",
+                    intent_kind=intent_kind,
                     reason="multiple_equal_keyword_matches",
                     keyword_match_count=len(keyword_matches),
                 )
@@ -830,10 +969,11 @@ def build_calendar_graph(
                 reasoning = (
                     reasoning
                     + f" (Multiple events match — {len(keyword_matches)} candidates. "
-                    "Please confirm before I delete.)"
+                    f"Please confirm before I {verb}.)"
                 )
             log.info(
-                "calendar_delete_decision",
+                "calendar_match_decision",
+                intent_kind=intent_kind,
                 confidence=confidence,
                 event_id=(decision.event_id or "")[:40],
                 reasoning=reasoning[:120],
@@ -849,7 +989,7 @@ def build_calendar_graph(
                 "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
             }
         except Exception as e:  # noqa: BLE001
-            log.error("calendar_delete_reason_failed", error=str(e))
+            log.error("calendar_match_reason_failed", intent_kind=intent_kind, error=str(e))
             return {
                 "match_decision": {
                     "confidence": "none",
@@ -857,6 +997,14 @@ def build_calendar_graph(
                     "reasoning": f"reasoning failed: {e}",
                 },
             }
+
+    async def reason_about_delete_match(state: CalendarState) -> dict:
+        """Thin wrapper — delegates to the shared event-match helper."""
+        return await _reason_about_event_match(state, "delete")
+
+    async def reason_about_update_match(state: CalendarState) -> dict:
+        """Thin wrapper — delegates to the shared event-match helper."""
+        return await _reason_about_event_match(state, "update")
 
     async def delete_event_action(state: CalendarState) -> dict:
         decision = state.get("match_decision") or {}
@@ -870,20 +1018,20 @@ def build_calendar_graph(
             uid_match=uid in candidate_ids,
         )
         if not uid:
-            return {"outcome": "delete_not_found"}
+            return {"outcome": Outcome.DELETE_NOT_FOUND.value}
         # Find the candidate row so we can show details in the reply
         target = next((c for c in candidates if c.get("id") == uid), None)
         if target is None:
             log.warning("calendar_delete_target_not_in_candidates", uid=uid)
-            return {"outcome": "delete_not_found"}
+            return {"outcome": Outcome.DELETE_NOT_FOUND.value}
         try:
             success = calendar_client.delete_event(uid)
         except Exception as e:  # noqa: BLE001
             log.error("calendar_delete_failed", error=str(e), uid=uid)
-            return {"outcome": "error", "error_message": str(e)}
+            return {"outcome": Outcome.ERROR.value, "error_message": str(e)}
         if not success:
             log.warning("calendar_delete_returned_false", uid=uid)
-            return {"outcome": "delete_not_found"}
+            return {"outcome": Outcome.DELETE_NOT_FOUND.value}
         return {
             "deleted_event": {
                 "summary": target.get("summary"),
@@ -894,129 +1042,218 @@ def build_calendar_graph(
                 or "primary",
                 "timezone": timezone_name,
             },
-            "outcome": "deleted",
+            "outcome": Outcome.DELETED.value,
         }
 
+    # ── Update branch nodes ───────────────────────────────────────────────
+
+    async def parse_update_target(state: CalendarState) -> dict:
+        prompt = _UPDATE_PARSE_PROMPT.format(
+            today_day_of_week=state["today_day_of_week"],
+            today_iso=state["today_iso"],
+            timezone_name=state["timezone_name"],
+            upcoming_table=_format_upcoming_table(state["upcoming_days"]),
+            email_body=state["email_body"],
+        )
+        pool, model_label = _pick_model_label(state)
+        agent = update_parse_cloud if pool == "cloud" else update_parse_local
+        try:
+            result = await agent.run(prompt)
+            usage = result.usage()
+            draft: UpdateEventDraft = result.output
+            log.info(
+                "calendar_update_target_parsed",
+                intent_summary=draft.target.intent_summary,
+                has_change=draft.has_any_change(),
+                model=model_label,
+            )
+            # Flatten the draft so replies.py and the matcher both have a
+            # uniform dict shape ({target: {...}, new_start, new_end, ...}).
+            update_target_dict: dict[str, Any] = {
+                "target": draft.target.model_dump(),
+                "new_start": draft.new_start_iso,
+                "new_end": draft.new_end_iso,
+                "new_title": draft.new_title,
+                "new_location": draft.new_location,
+                "new_notes": draft.new_notes,
+            }
+            base: dict[str, Any] = {
+                "update_target": update_target_dict,
+                "intent_kind": "update",
+                "input_tokens": state.get("input_tokens", 0) + (usage.input_tokens or 0),
+                "output_tokens": state.get("output_tokens", 0) + (usage.output_tokens or 0),
+            }
+            # No-op early-exit: if the user didn't ask for any change we
+            # don't need to fetch candidates or call the matcher.
+            if not draft.has_any_change():
+                base["outcome"] = Outcome.UPDATE_NO_CHANGE.value
+            return base
+        except Exception as e:  # noqa: BLE001
+            log.error("calendar_update_parse_failed", error=str(e))
+            return {
+                "outcome": Outcome.UPDATE_NOT_FOUND.value,
+                "error_message": f"parse_error: {e}",
+                "intent_kind": "update",
+            }
+
+    async def fetch_candidates_for_update(state: CalendarState) -> dict:
+        """Pure code: fetch all events in the relevant date window.
+
+        Mirrors `fetch_candidates_for_delete` — same window heuristic
+        (date hint → that day; no hint → next 30 days). Kept as a separate
+        node from the delete fetcher because the targets live in different
+        state keys; the body is intentionally small.
+        """
+        target = (state.get("update_target") or {}).get("target") or {}
+        date_hint = target.get("date_hint_iso")
+        tz = ZoneInfo(state["timezone_name"])
+
+        if date_hint:
+            try:
+                day = datetime.fromisoformat(date_hint).date()
+            except ValueError:
+                day = datetime.now(tz).date()
+            time_min = datetime.combine(day, datetime.min.time(), tzinfo=tz)
+            time_max = time_min + timedelta(days=1)
+        else:
+            time_min = datetime.now(tz)
+            time_max = time_min + timedelta(days=30)
+
+        existing = calendar_client.list_events(time_min=time_min, time_max=time_max)
+        candidates = [
+            {
+                "id": ev.get("id"),
+                "summary": ev.get("summary", "Untitled"),
+                "location": ev.get("location"),
+                "description": ev.get("description"),
+                "start": (ev.get("start") or {}).get("dateTime"),
+                "end": (ev.get("end") or {}).get("dateTime"),
+                "recurrence": ev.get("recurrence"),
+            }
+            for ev in existing
+        ]
+        log.info(
+            "calendar_update_candidates",
+            window_events=len(candidates),
+            date_hint=date_hint,
+        )
+        return {"matching_events": candidates}
+
+    async def update_event_action(state: CalendarState) -> dict:
+        decision = state.get("match_decision") or {}
+        uid = decision.get("event_id")
+        candidates = state.get("matching_events") or []
+        update_target = state.get("update_target") or {}
+        if not uid:
+            return {"outcome": Outcome.UPDATE_NOT_FOUND.value}
+        target = next((c for c in candidates if c.get("id") == uid), None)
+        if target is None:
+            log.warning("calendar_update_target_not_in_candidates", uid=uid)
+            return {"outcome": Outcome.UPDATE_NOT_FOUND.value}
+
+        # Build the EventPatch. If only new_start is given and no new_end,
+        # preserve the original duration so a "move my 3pm to 4pm" doesn't
+        # accidentally collapse the meeting to 0min.
+        def _opt_dt(value: str | None) -> datetime | None:
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return None
+
+        new_start = _opt_dt(update_target.get("new_start"))
+        new_end = _opt_dt(update_target.get("new_end"))
+        if new_start and not new_end:
+            old_start = _opt_dt(target.get("start"))
+            old_end = _opt_dt(target.get("end"))
+            if old_start and old_end:
+                new_end = new_start + (old_end - old_start)
+
+        try:
+            patch = EventPatch(
+                start=new_start,
+                end=new_end,
+                summary=update_target.get("new_title"),
+                location=update_target.get("new_location"),
+                description=update_target.get("new_notes"),
+            )
+        except Exception as e:  # noqa: BLE001 — validation error
+            log.error("calendar_update_patch_invalid", error=str(e), uid=uid)
+            return {"outcome": Outcome.ERROR.value, "error_message": str(e)}
+
+        if patch.is_empty():
+            return {"outcome": Outcome.UPDATE_NO_CHANGE.value}
+
+        if not hasattr(calendar_client, "update_event"):
+            log.error(
+                "calendar_update_not_supported_by_client",
+                client_type=type(calendar_client).__name__,
+            )
+            return {
+                "outcome": Outcome.ERROR.value,
+                "error_message": "This calendar provider does not support updates yet.",
+            }
+        try:
+            updated = calendar_client.update_event(uid, patch=patch)
+        except LookupError:
+            log.warning("calendar_update_event_uid_missing", uid=uid)
+            return {"outcome": Outcome.UPDATE_NOT_FOUND.value}
+        except Exception as e:  # noqa: BLE001
+            log.error("calendar_update_failed", error=str(e), uid=uid)
+            return {"outcome": Outcome.ERROR.value, "error_message": str(e)}
+
+        is_recurring = bool(target.get("recurrence"))
+        return {
+            "updated_event": {
+                "summary": updated.get("summary") or target.get("summary"),
+                "start_iso": (updated.get("start") or {}).get("dateTime")
+                or target.get("start"),
+                "end_iso": (updated.get("end") or {}).get("dateTime")
+                or target.get("end"),
+                "location": updated.get("location") or target.get("location"),
+                "description": updated.get("description"),
+                "calendar_name": getattr(calendar_client, "_calendar_name", "")
+                or "primary",
+                "timezone": timezone_name,
+                "is_recurring": is_recurring,
+            },
+            "outcome": Outcome.UPDATED.value,
+        }
+
+    async def mark_update_not_found(state: CalendarState) -> dict:
+        return {"outcome": Outcome.UPDATE_NOT_FOUND.value}
+
     async def mark_needs_confirmation(state: CalendarState) -> dict:
-        return {"outcome": "delete_needs_confirmation"}
+        """Emit the right *_needs_confirmation outcome for whichever branch
+        we're in. The parse step sets `intent_kind` so this single marker
+        node handles both delete and update without forking."""
+        if state.get("intent_kind") == "update":
+            return {"outcome": Outcome.UPDATE_NEEDS_CONFIRMATION.value}
+        return {"outcome": Outcome.DELETE_NEEDS_CONFIRMATION.value}
 
     async def mark_unsupported(state: CalendarState) -> dict:
         action = state.get("action", "unknown")
         return {
-            "outcome": "unsupported",
+            "outcome": Outcome.UNSUPPORTED.value,
             "error_message": (
                 f"The '{action}' action isn't supported yet — I can only "
-                "schedule and cancel events for now. Listing/queries are coming."
+                "schedule, update, and cancel events for now. Listing/queries are coming."
             ),
         }
 
     async def mark_clarification(state: CalendarState) -> dict:
-        return {"outcome": "clarification"}
+        return {"outcome": Outcome.CLARIFICATION.value}
 
     async def build_reply(state: CalendarState) -> dict:
-        from alfred.notifications.calendar_render import (
-            render_clarification_html,
-            render_clarification_plain,
-            render_event_html,
-            render_event_plain,
-        )
+        """Render the user-facing reply via the dispatch-table in replies.py.
 
-        outcome = state.get("outcome", "clarification")
-        if outcome == "created":
-            event = state["created_event"]
-            return {
-                "reply_plain": render_event_plain(event),
-                "reply_html": render_event_html(event),
-            }
-        if outcome == "deleted":
-            from alfred.notifications.calendar_render import (
-                render_event_deleted_html,
-                render_event_deleted_plain,
-            )
+        Adding a new outcome is a one-handler change in replies.py rather
+        than an if/elif edit here.
+        """
+        plain, html = build_reply_pair(dict(state))
+        return {"reply_plain": plain, "reply_html": html}
 
-            event = state["deleted_event"]
-            return {
-                "reply_plain": render_event_deleted_plain(event),
-                "reply_html": render_event_deleted_html(event),
-            }
-        if outcome == "delete_not_found":
-            target = state.get("delete_target") or {}
-            kw = ", ".join(target.get("title_keywords", []) or []) or "(no keywords)"
-            txt = (
-                f"I couldn't find an event matching {kw}"
-                + (
-                    f" on {target['date_hint_iso']}"
-                    if target.get("date_hint_iso")
-                    else " in the next 30 days"
-                )
-                + ".\n\nCould you reply with the event title and date so I can find it?"
-            )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
-        if outcome == "delete_needs_confirmation":
-            decision = state.get("match_decision") or {}
-            event_id = decision.get("event_id")
-            candidates = state.get("matching_events") or []
-            target = next((c for c in candidates if c.get("id") == event_id), None)
-            if target is None:
-                txt = (
-                    f"I think you mean an event matching: {decision.get('reasoning', '')}. "
-                    "Could you reply with more details?"
-                )
-            else:
-                start = target.get("start") or ""
-                txt = (
-                    "I think you want to delete:\n\n"
-                    f"  • {target.get('summary', 'Untitled')}\n"
-                    f"    {start}\n"
-                    + (
-                        f"    Location: {target['location']}\n"
-                        if target.get("location")
-                        else ""
-                    )
-                    + (
-                        f"\nWhy I think this: {decision.get('reasoning', '')}\n"
-                        if decision.get("reasoning")
-                        else "\n"
-                    )
-                    + "\nReply 'yes' to confirm, or give me more details to pick a different one."
-                )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
-        if outcome == "incomplete":
-            txt = _format_incomplete_text(state.get("completeness_issues", []))
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
-        if outcome == "unsupported":
-            txt = state.get("error_message", "That action isn't supported yet.")
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
-        if outcome == "error":
-            txt = (
-                "Sorry — something went wrong while processing your request: "
-                + state.get("error_message", "unknown error")
-            )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
-        # default: clarification
-        txt = (
-            "I couldn't tell what calendar action you wanted. I can create new "
-            "events — try something like 'Lunch with Sarah next Wednesday at 12:30pm'."
-        )
-        return {
-            "reply_plain": render_clarification_plain(txt),
-            "reply_html": render_clarification_html(txt),
-        }
 
     # ── Edges ────────────────────────────────────────────────────────────
 
@@ -1026,9 +1263,40 @@ def build_calendar_graph(
             return "parse_event"
         if action == "delete":
             return "parse_delete_target"
+        if action == "update":
+            return "parse_update_target"
         if action == "query":
             return "mark_unsupported"
         return "mark_clarification"
+
+    def route_after_parse_update(state: CalendarState) -> str:
+        # If parse short-circuited (no change at all, or parse error), go
+        # straight to build_reply — no point fetching candidates.
+        outcome = state.get("outcome")
+        if outcome in (
+            Outcome.UPDATE_NO_CHANGE.value,
+            Outcome.UPDATE_NOT_FOUND.value,
+        ):
+            return "build_reply"
+        return "fetch_candidates_for_update"
+
+    def route_after_update_reasoning(state: CalendarState) -> str:
+        outcome = state.get("outcome")
+        decision = state.get("match_decision") or {}
+        confidence = decision.get("confidence", "none")
+        log.info(
+            "calendar_update_route_decision",
+            current_outcome=outcome,
+            confidence=confidence,
+            event_id=(decision.get("event_id") or "")[:40],
+        )
+        if outcome == Outcome.UPDATE_NOT_FOUND.value:
+            return "build_reply"
+        if confidence == "high":
+            return "update_event_action"
+        if confidence == "medium":
+            return "mark_needs_confirmation"
+        return "mark_update_not_found"  # low / none → ask user to clarify
 
     def route_after_validate(state: CalendarState) -> str:
         return "build_reply" if state.get("outcome") == "incomplete" else "check_conflicts"
@@ -1044,7 +1312,7 @@ def build_calendar_graph(
             event_id=(decision.get("event_id") or "")[:40],
         )
         # Parse step may have short-circuited if it failed.
-        if outcome == "delete_not_found":
+        if outcome == Outcome.DELETE_NOT_FOUND.value:
             return "build_reply"
         if confidence == "high":
             return "delete_event_action"
@@ -1053,7 +1321,7 @@ def build_calendar_graph(
         return "mark_delete_not_found"  # low / none → ask user to clarify
 
     async def mark_delete_not_found(state: CalendarState) -> dict:
-        return {"outcome": "delete_not_found"}
+        return {"outcome": Outcome.DELETE_NOT_FOUND.value}
 
     # No router after check_conflicts anymore — conflicts are informational,
     # we always proceed to create_event.
@@ -1075,8 +1343,13 @@ def build_calendar_graph(
         ("fetch_candidates_for_delete", fetch_candidates_for_delete),
         ("reason_about_delete_match", reason_about_delete_match),
         ("delete_event_action", delete_event_action),
+        ("parse_update_target", parse_update_target),
+        ("fetch_candidates_for_update", fetch_candidates_for_update),
+        ("reason_about_update_match", reason_about_update_match),
+        ("update_event_action", update_event_action),
         ("mark_needs_confirmation", mark_needs_confirmation),
         ("mark_delete_not_found", mark_delete_not_found),
+        ("mark_update_not_found", mark_update_not_found),
         ("mark_unsupported", mark_unsupported),
         ("mark_clarification", mark_clarification),
         ("build_reply", build_reply),
@@ -1091,6 +1364,7 @@ def build_calendar_graph(
         {
             "parse_event": "parse_event",
             "parse_delete_target": "parse_delete_target",
+            "parse_update_target": "parse_update_target",
             "mark_unsupported": "mark_unsupported",
             "mark_clarification": "mark_clarification",
         },
@@ -1122,6 +1396,28 @@ def build_calendar_graph(
     graph.add_edge("delete_event_action", "build_reply")
     graph.add_edge("mark_needs_confirmation", "build_reply")
     graph.add_edge("mark_delete_not_found", "build_reply")
+    # Update branch
+    graph.add_conditional_edges(
+        "parse_update_target",
+        route_after_parse_update,
+        {
+            "fetch_candidates_for_update": "fetch_candidates_for_update",
+            "build_reply": "build_reply",
+        },
+    )
+    graph.add_edge("fetch_candidates_for_update", "reason_about_update_match")
+    graph.add_conditional_edges(
+        "reason_about_update_match",
+        route_after_update_reasoning,
+        {
+            "update_event_action": "update_event_action",
+            "mark_needs_confirmation": "mark_needs_confirmation",
+            "mark_update_not_found": "mark_update_not_found",
+            "build_reply": "build_reply",
+        },
+    )
+    graph.add_edge("update_event_action", "build_reply")
+    graph.add_edge("mark_update_not_found", "build_reply")
     graph.add_edge("mark_unsupported", "build_reply")
     graph.add_edge("mark_clarification", "build_reply")
     graph.add_edge("build_reply", END)

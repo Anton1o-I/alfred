@@ -19,8 +19,39 @@ import caldav
 import structlog
 from icalendar import Calendar as ICal
 from icalendar import Event as IEvent
+from pydantic import BaseModel, model_validator
 
 log = structlog.get_logger()
+
+
+class EventPatch(BaseModel):
+    """Partial update for an existing calendar event.
+
+    All fields optional — only provided ones are written. Lives here (not
+    in the workflow module) because the icloud client owns the CalDAV
+    surface and we don't want a circular import from workflow → client.
+
+    `is_empty()` is the no-op detector the workflow uses to short-circuit
+    to the `update_no_change` outcome before hitting CalDAV.
+    """
+
+    start: datetime | None = None
+    end: datetime | None = None
+    summary: str | None = None
+    location: str | None = None
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_time_range(self) -> EventPatch:
+        if self.start and self.end and self.end <= self.start:
+            raise ValueError("end must be after start")
+        return self
+
+    def is_empty(self) -> bool:
+        return all(
+            v is None
+            for v in (self.start, self.end, self.summary, self.location, self.description)
+        )
 
 CALDAV_URL = "https://caldav.icloud.com"
 
@@ -290,6 +321,82 @@ class IcloudCalendarClient:
         if not deleted:
             log.info("calendar_event_delete_miss", event_uid=event_uid, provider="icloud")
         return deleted
+
+    def update_event(self, event_uid: str, *, patch: EventPatch) -> dict[str, Any]:
+        """Native CalDAV PUT-PATCH for an event identified by UID.
+
+        Preserves UID, RRULE, organizer, attendees, alarms — we only
+        overwrite the properties present in `patch`. Returns the updated
+        event in the same dict shape `list_events` returns.
+
+        Raises `LookupError` if the UID isn't on the calendar (caller
+        translates to the `update_not_found` workflow outcome).
+        """
+        if patch.is_empty():
+            raise ValueError("EventPatch has no fields set")
+        cal = self._get_calendar()
+        try:
+            obj = cal.event_by_uid(event_uid)
+        except caldav.lib.error.NotFoundError as e:
+            raise LookupError(f"event uid not found: {event_uid}") from e
+
+        component = None
+        for comp in obj.icalendar_instance.walk("VEVENT"):
+            component = comp
+            break
+        if component is None:
+            raise LookupError(f"VEVENT not found in object for uid: {event_uid}")
+
+        # Overwrite only provided properties. icalendar requires us to
+        # pop then add since assignment on .icalendar_component doesn't
+        # always replace cleanly across versions.
+        if patch.summary is not None:
+            component.pop("summary", None)
+            component.add("summary", patch.summary)
+        if patch.start is not None:
+            component.pop("dtstart", None)
+            component.add("dtstart", patch.start)
+        if patch.end is not None:
+            component.pop("dtend", None)
+            component.add("dtend", patch.end)
+        if patch.location is not None:
+            component.pop("location", None)
+            component.add("location", patch.location)
+        if patch.description is not None:
+            component.pop("description", None)
+            component.add("description", patch.description)
+
+        obj.save()
+
+        updated = _ical_to_dict(component)
+        log.info(
+            "calendar_event_updated",
+            event_uid=event_uid,
+            provider="icloud",
+            fields=[
+                k for k, v in (
+                    ("summary", patch.summary),
+                    ("start", patch.start),
+                    ("end", patch.end),
+                    ("location", patch.location),
+                    ("description", patch.description),
+                ) if v is not None
+            ],
+        )
+
+        # Refresh recent-writes cache so post-write reads see the new
+        # values rather than the iCloud-cached old ones.
+        import time
+
+        self._recent_writes = [e for e in self._recent_writes if e.get("id") != event_uid]
+        self._recent_writes_meta = [
+            m for m in self._recent_writes_meta if m[0] != event_uid
+        ]
+        self._recent_writes.append(updated)
+        self._recent_writes_meta.append(
+            (event_uid, time.time() + self.RECENT_WRITES_TTL_SECONDS)
+        )
+        return updated
 
     def find_conflicts(
         self,
