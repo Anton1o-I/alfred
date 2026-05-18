@@ -8,12 +8,14 @@ email_from_name: "Alfred"  # default — used when no per-agent override matches
 email_from_names_by_agent:
   curator: "Alfred · Research"
   calendar: "Alfred · Scheduler"
+  tasks: "Alfred · Tasks"
 
 # Short tagline appended below the persona name as a signature.
 # Empty → no signature for that agent.
 email_taglines_by_agent:
   curator: "AI research curator · reply to add topics or adjust focus"
   calendar: "AI assistant · reply to confirm, correct, or ask for changes"
+  tasks: "AI chore tracker · reply to add, complete, list, or update chores"
 
 # iCloud path: identity comes from env vars (see .env.example).
 icloud_email_env: "ALFRED_ICLOUD_EMAIL"

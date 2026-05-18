@@ -1328,6 +1328,13 @@ def build_tasks_graph(
             has_updated=bool(state.get("updated_chore")),
         )
 
+        # Compose (header, txt) per outcome. The HTML envelope's banner
+        # comes from `header` — using outcome-specific headers means
+        # success replies don't get a misleading "Need a bit more info"
+        # title in the HTML.
+        header = "Need a bit more info"
+        txt: str
+
         if outcome == "created":
             c = state["created_chore"]
             if c["recurrence_type"] == "once":
@@ -1336,88 +1343,71 @@ def build_tasks_graph(
                 when = _format_recurrence_human(
                     c.get("recurrence_rule") or {}, c["recurrence_type"]
                 )
+            header = "Chore added"
             txt = (
                 f"Added chore '{c['title']}' (id: {c['id']})\n"
                 f"  • assignee: {c['assignee']}\n"
                 f"  • {when}\n"
                 f"  • shame after: {c['shame_after_days']} days overdue"
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "duplicate_existing":
+        elif outcome == "duplicate_existing":
             dup = state.get("duplicate_check") or {}
             existing_id = dup.get("existing_chore_id") or "?"
+            header = "Duplicate chore"
             txt = (
                 f"This looks like the same chore as '{existing_id}' that's "
                 f"already on the list. {dup.get('reasoning', '')}\n\n"
                 "Did you mean to update the existing chore? Reply with what "
                 "to change, or 'add anyway' if it's actually a separate chore."
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "duplicate_needs_confirmation":
+        elif outcome == "duplicate_needs_confirmation":
             dup = state.get("duplicate_check") or {}
             existing_id = dup.get("existing_chore_id") or "?"
+            header = "Possible duplicate"
             txt = (
                 f"I think this might overlap with the existing chore "
                 f"'{existing_id}'. {dup.get('reasoning', '')}\n\n"
                 "Reply 'add anyway' to create it as a new chore, or describe "
                 "the difference so I can update the existing one instead."
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "completed":
+        elif outcome == "completed":
             c = state["completed_chore"]
+            header = "Chore completed"
             txt = (
                 f"Marked '{c['title']}' (id: {c['id']}) as done.\n"
                 f"  • completed by: {c['completed_by']}\n"
                 f"  • at: {c['completed_at']}"
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "deleted":
+        elif outcome == "deleted":
             c = state["deleted_chore"]
+            header = "Chore removed"
             txt = (
                 f"Removed '{c['title']}' (id: {c['id']}) from tracking.\n\n"
                 "You won't get reminders for this chore anymore. Existing "
                 "completion history is preserved."
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "updated":
+        elif outcome == "updated":
             c = state["updated_chore"]
             changes = ", ".join(c.get("changed_fields", [])) or "(none)"
             when = _format_recurrence_human(
                 c.get("recurrence_rule") or {}, c["recurrence_type"]
             )
+            header = "Chore updated"
             txt = (
                 f"Updated '{c['title']}' (id: {c['id']}). Changed: {changes}.\n"
                 f"  • assignee: {c['assignee']}\n"
                 f"  • recurrence: {when}\n"
                 f"  • shame after: {c['shame_after_days']} days overdue"
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "listed":
+        elif outcome == "listed":
             summary = state.get("pending_summary") or []
+            header = "Your chores"
             if not summary:
                 txt = "No chores are currently being tracked."
             else:
@@ -1451,25 +1441,18 @@ def build_tasks_graph(
                             f"due {s['next_due_iso'][:10]}"
                         )
                 txt = "\n".join(lines)
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "target_needs_confirmation":
+        elif outcome == "target_needs_confirmation":
             match = state.get("target_match") or {}
             chore_id = match.get("chore_id") or "?"
+            header = "Need confirmation"
             txt = (
                 f"I think you mean the chore '{chore_id}'. "
                 f"{match.get('reasoning', '')}\n\n"
                 "Reply 'yes' to confirm, or give me more detail to pick a different one."
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "target_not_found":
+        elif outcome == "target_not_found":
             action = state.get("action") or "that"
             ref = (state.get("target_reference") or {}).get("reference") or ""
             tail = f" matching '{ref}'" if ref else ""
@@ -1477,43 +1460,31 @@ def build_tasks_graph(
                 f"I couldn't find a chore{tail} to {action}. "
                 "Reply with the chore id or a clearer name."
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "incomplete":
+        elif outcome == "incomplete":
             txt = _format_incomplete_text(state.get("completeness_issues", []))
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "unsupported":
+        elif outcome == "unsupported":
+            header = "Not supported yet"
             txt = state.get("error_message", "That action isn't supported yet.")
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        if outcome == "error":
+        elif outcome == "error":
+            header = "Something went wrong"
             txt = (
                 "Sorry — something went wrong while processing your chore: "
                 + state.get("error_message", "unknown error")
             )
-            return {
-                "reply_plain": render_clarification_plain(txt),
-                "reply_html": render_clarification_html(txt),
-            }
 
-        # default: clarification
-        txt = (
-            "I couldn't tell what you wanted to do with the chore list. Try "
-            "something like 'Add chore: take out trash every Tuesday, household'."
-        )
+        else:
+            # default: unclassified clarification
+            txt = (
+                "I couldn't tell what you wanted to do with the chore list. Try "
+                "something like 'Add chore: take out trash every Tuesday, household'."
+            )
+
         return {
             "reply_plain": render_clarification_plain(txt),
-            "reply_html": render_clarification_html(txt),
+            "reply_html": render_clarification_html(txt, header=header),
         }
 
     # ── Edges ────────────────────────────────────────────────────────────

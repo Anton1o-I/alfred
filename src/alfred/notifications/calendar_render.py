@@ -258,14 +258,22 @@ def render_event_html(event: dict[str, Any]) -> str:
     )
 
 
-def render_clarification_html(message: str) -> str:
-    """A simple bordered card for clarification responses."""
+def render_clarification_html(message: str, header: str = "Need a bit more info") -> str:
+    """A simple bordered card with a customizable header.
+
+    Despite the name, this is reused for any agent reply that doesn't have
+    a richer dedicated renderer (event card, briefing, etc.). Pass `header`
+    to override the default "Need a bit more info" banner — e.g. "Chore
+    added" for success replies — so the HTML envelope doesn't lie about
+    what happened.
+    """
     safe = escape(message).replace("\n", "<br>")
+    safe_header = escape(header)
     return (
         '<!doctype html><html><head><meta charset="utf-8"></head>'
         f'<body style="{_BODY_STYLE}">'
         f'<div style="{_CONTAINER_STYLE}">'
-        f'<p style="{_HEADER_STYLE_NEUTRAL}">Need a bit more info</p>'
+        f'<p style="{_HEADER_STYLE_NEUTRAL}">{safe_header}</p>'
         f'<div style="font-size: 15px; line-height: 1.55; color: #1d1d1f;">{safe}</div>'
         "</div></body></html>"
     )
