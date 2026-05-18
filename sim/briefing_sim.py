@@ -103,6 +103,17 @@ class Scenario:
     chores: list[ChoreStatus]
 
 
+# Stand-in display names so sim output mirrors production rendering.
+# Production sources these from env vars via RecipientConfig.name_env;
+# the sim hardcodes representative values because there's no recipient
+# config to read.
+_SIM_ASSIGNEE_NAMES: dict[str, str] = {
+    "primary": "Alex",
+    "secondary": "Sam",
+    "household": "household",
+}
+
+
 def _build_scenarios() -> list[Scenario]:
     """Six scenarios spanning the lead-section decision space."""
     tz = ZoneInfo("America/Phoenix")
@@ -121,8 +132,8 @@ def _build_scenarios() -> list[Scenario]:
             tomorrow=tomorrow,
             events=[],
             chores=[
-                _chore(title="Take out trash", assignee="alex", overdue_days=4),
-                _chore(title="Water plants", assignee="alex", overdue_days=2),
+                _chore(title="Take out trash", assignee="primary", overdue_days=4),
+                _chore(title="Water plants", assignee="primary", overdue_days=2),
             ],
         ),
         Scenario(
@@ -132,7 +143,7 @@ def _build_scenarios() -> list[Scenario]:
             events=[],
             chores=[
                 _chore(title="Empty dishwasher", assignee="household", overdue_days=0),
-                _chore(title="Laundry", assignee="alex", overdue_days=0),
+                _chore(title="Laundry", assignee="primary", overdue_days=0),
                 _chore(title="Sweep kitchen", assignee="household", overdue_days=0),
             ],
         ),
@@ -169,7 +180,7 @@ def _build_scenarios() -> list[Scenario]:
                 _event(summary="Soccer practice", start=at(17), end=at(18, 30)),
             ],
             chores=[
-                _chore(title="Replace HVAC filter", assignee="alex", overdue_days=6),
+                _chore(title="Replace HVAC filter", assignee="primary", overdue_days=6),
             ],
         ),
         Scenario(
@@ -180,8 +191,8 @@ def _build_scenarios() -> list[Scenario]:
                 _event(summary="Coffee with Sam", start=at(15), end=at(15, 45)),
             ],
             chores=[
-                _chore(title="Pay credit card", assignee="alex", overdue_days=0),
-                _chore(title="Pick up dry cleaning", assignee="alex", overdue_days=-1),
+                _chore(title="Pay credit card", assignee="primary", overdue_days=0),
+                _chore(title="Pick up dry cleaning", assignee="primary", overdue_days=-1),
             ],
         ),
         Scenario(
@@ -197,9 +208,9 @@ def _build_scenarios() -> list[Scenario]:
                 _event(summary="Dinner with family", start=at(18, 30), end=at(20)),
             ],
             chores=[
-                _chore(title="Take out trash", assignee="alex", overdue_days=5),
-                _chore(title="Reply to landlord", assignee="alex", overdue_days=3),
-                _chore(title="Refill prescription", assignee="alex", overdue_days=1),
+                _chore(title="Take out trash", assignee="primary", overdue_days=5),
+                _chore(title="Reply to landlord", assignee="primary", overdue_days=3),
+                _chore(title="Refill prescription", assignee="primary", overdue_days=1),
             ],
         ),
     ]
@@ -228,7 +239,7 @@ async def _render_one(
         last_end=analysis["last_end"] or "—",
         open_blocks=analysis["open_blocks"] or "(none)",
         tight_transitions=analysis["tight_transitions"] or "(none)",
-        chores_block=_render_chores_for_prompt(categorized),
+        chores_block=_render_chores_for_prompt(categorized, _SIM_ASSIGNEE_NAMES),
     )
     result = await agent.run(prompt)
     narrative = result.output
@@ -236,8 +247,12 @@ async def _render_one(
     has_chores = any(
         categorized[k] for k in ("overdue", "due_today", "due_tomorrow")
     )
-    chores_plain = render_chores_plain(categorized) if has_chores else None
-    chores_html = render_chores_html(categorized) if has_chores else None
+    chores_plain = (
+        render_chores_plain(categorized, _SIM_ASSIGNEE_NAMES) if has_chores else None
+    )
+    chores_html = (
+        render_chores_html(categorized, _SIM_ASSIGNEE_NAMES) if has_chores else None
+    )
 
     headline = f"TOMORROW · {scenario.tomorrow.strftime('%a, %B %-d')}"
     plain, html = _render_email(

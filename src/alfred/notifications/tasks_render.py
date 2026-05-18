@@ -60,34 +60,56 @@ def shame_assignees(statuses: list[Any]) -> set[str]:
     }
 
 
-def render_chores_plain(categorized: dict[str, list[Any]]) -> str:
-    """Plain-text section showing overdue / today / tomorrow chores."""
+def _display_assignee(
+    assignee: str, assignee_names: dict[str, str] | None
+) -> str:
+    """Resolve a stored user_id token to a display name when one is configured."""
+    if not assignee_names:
+        return assignee
+    return assignee_names.get(assignee, assignee)
+
+
+def render_chores_plain(
+    categorized: dict[str, list[Any]],
+    assignee_names: dict[str, str] | None = None,
+) -> str:
+    """Plain-text section showing overdue / today / tomorrow chores.
+
+    `assignee_names` maps stored user_id tokens ("primary", "secondary",
+    "household") to display names sourced from env vars. Falls back to
+    the raw token if no mapping exists.
+    """
     if not (categorized["overdue"] or categorized["due_today"] or categorized["due_tomorrow"]):
         return "(no chores due in the next day)"
     lines: list[str] = []
     if categorized["overdue"]:
         lines.append("OVERDUE")
         for s in categorized["overdue"]:
+            who = _display_assignee(s.chore.assignee, assignee_names)
             lines.append(
-                f"  ⚠  {s.chore.title} ({s.chore.assignee}) — "
-                f"{s.overdue_days}d overdue"
+                f"  ⚠  {s.chore.title} ({who}) — {s.overdue_days}d overdue"
             )
     if categorized["due_today"]:
         if lines:
             lines.append("")
         lines.append("DUE TODAY")
         for s in categorized["due_today"]:
-            lines.append(f"  •  {s.chore.title} ({s.chore.assignee})")
+            who = _display_assignee(s.chore.assignee, assignee_names)
+            lines.append(f"  •  {s.chore.title} ({who})")
     if categorized["due_tomorrow"]:
         if lines:
             lines.append("")
         lines.append("DUE TOMORROW")
         for s in categorized["due_tomorrow"]:
-            lines.append(f"  •  {s.chore.title} ({s.chore.assignee})")
+            who = _display_assignee(s.chore.assignee, assignee_names)
+            lines.append(f"  •  {s.chore.title} ({who})")
     return "\n".join(lines)
 
 
-def render_chores_html(categorized: dict[str, list[Any]]) -> str:
+def render_chores_html(
+    categorized: dict[str, list[Any]],
+    assignee_names: dict[str, str] | None = None,
+) -> str:
     """Inline-styled HTML chore section for the briefing email."""
     if not (categorized["overdue"] or categorized["due_today"] or categorized["due_tomorrow"]):
         return (
@@ -120,31 +142,34 @@ def render_chores_html(categorized: dict[str, list[Any]]) -> str:
     if categorized["overdue"]:
         parts.append(f'<h3 style="{overdue_h_style}">Overdue</h3>')
         for s in categorized["overdue"]:
+            who = _display_assignee(s.chore.assignee, assignee_names)
             parts.append(
                 f'<div style="{row_style}">'
                 f'<span style="{overdue_marker}">{s.overdue_days}d late</span>'
                 f'<span style="{title_overdue}">{escape(s.chore.title)}</span>'
-                f' <span style="{assignee_style}">· {escape(s.chore.assignee)}</span>'
+                f' <span style="{assignee_style}">· {escape(who)}</span>'
                 "</div>"
             )
     if categorized["due_today"]:
         parts.append(f'<h3 style="{group_h_style}">Due today</h3>')
         for s in categorized["due_today"]:
+            who = _display_assignee(s.chore.assignee, assignee_names)
             parts.append(
                 f'<div style="{row_style}">'
                 f'<span style="{due_marker}">today</span>'
                 f'<span style="{title_normal}">{escape(s.chore.title)}</span>'
-                f' <span style="{assignee_style}">· {escape(s.chore.assignee)}</span>'
+                f' <span style="{assignee_style}">· {escape(who)}</span>'
                 "</div>"
             )
     if categorized["due_tomorrow"]:
         parts.append(f'<h3 style="{group_h_style}">Due tomorrow</h3>')
         for s in categorized["due_tomorrow"]:
+            who = _display_assignee(s.chore.assignee, assignee_names)
             parts.append(
                 f'<div style="{row_style}">'
                 f'<span style="{due_marker}">tomorrow</span>'
                 f'<span style="{title_normal}">{escape(s.chore.title)}</span>'
-                f' <span style="{assignee_style}">· {escape(s.chore.assignee)}</span>'
+                f' <span style="{assignee_style}">· {escape(who)}</span>'
                 "</div>"
             )
     return "".join(parts)

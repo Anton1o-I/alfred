@@ -556,8 +556,15 @@ async def run_daily_briefing(app: App) -> dict:
         return {"events": 0, "chores": 0, "emailed": False}
 
     analysis = analyze_day(events, tz)
+    assignee_names = _build_assignee_names(app)
     narrative = await _generate_daily_narrative(
-        app, tomorrow, events, analysis, tz, chore_data["categorized"]
+        app,
+        tomorrow,
+        events,
+        analysis,
+        tz,
+        chore_data["categorized"],
+        assignee_names,
     )
 
     events_plain = _render_events_plain(events, tz)
@@ -572,8 +579,8 @@ async def run_daily_briefing(app: App) -> dict:
             render_chores_plain,
         )
 
-        chores_plain = render_chores_plain(chore_data["categorized"])
-        chores_html = render_chores_html(chore_data["categorized"])
+        chores_plain = render_chores_plain(chore_data["categorized"], assignee_names)
+        chores_html = render_chores_html(chore_data["categorized"], assignee_names)
 
     plain, html = _render_email(
         headline=headline,
@@ -696,10 +703,33 @@ def _calendar_timezone(app: App) -> str:
     return agent._config.timezone  # noqa: SLF001
 
 
-def _render_chores_for_prompt(categorized: dict | None) -> str:
+def _build_assignee_names(app: App) -> dict[str, str]:
+    """user_id -> display name map sourced from env vars via recipient configs.
+
+    Mirrors the lookup in `app.py` for the tasks agent — keeps personal
+    names out of tracked config and lets us show "Alex" instead of
+    "primary" in chore lines.
+    """
+    import os
+
+    out: dict[str, str] = {}
+    for r in app.settings.notifications.recipients:
+        if r.name_env:
+            name = os.environ.get(r.name_env, "").strip()
+            if name:
+                out[r.user_id] = name
+    return out
+
+
+def _render_chores_for_prompt(
+    categorized: dict | None,
+    assignee_names: dict[str, str] | None = None,
+) -> str:
     """Plain-text chore listing fed to the LLM so it can reason about specifics.
 
     Format mirrors the rendered email so the LLM and the user see the same facts.
+    Resolving assignees here means the LLM-generated summary references real
+    names rather than the internal user_id tokens.
     """
     if not categorized:
         return "(no chores tracked)"
@@ -714,8 +744,13 @@ def _render_chores_for_prompt(categorized: dict | None) -> str:
             continue
         lines.append(label)
         for s in statuses:
+            who = (
+                assignee_names.get(s.chore.assignee, s.chore.assignee)
+                if assignee_names
+                else s.chore.assignee
+            )
             suffix = f" — {s.overdue_days}d overdue" if s.overdue_days > 0 else ""
-            lines.append(f"  - {s.chore.title} ({s.chore.assignee}){suffix}")
+            lines.append(f"  - {s.chore.title} ({who}){suffix}")
     return "\n".join(lines) if lines else "(no chores due in the next day)"
 
 
@@ -726,10 +761,11 @@ async def _generate_daily_narrative(
     analysis: dict,
     tz: ZoneInfo,
     categorized_chores: dict | None = None,
+    assignee_names: dict[str, str] | None = None,
 ) -> DailyNarrative:
     agent = _make_narrative_agent(app.litellm_client, DailyNarrative, "local-default")
     events_block = _render_events_plain(events, tz)
-    chores_block = _render_chores_for_prompt(categorized_chores)
+    chores_block = _render_chores_for_prompt(categorized_chores, assignee_names)
     prompt = _DAILY_PROMPT.format(
         label=day.strftime("%A, %B %-d, %Y"),
         tz=tz.key,
