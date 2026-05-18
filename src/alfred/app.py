@@ -114,7 +114,7 @@ async def create_app(config_dir: Path = Path("config")) -> App:
     # 7. Agent registry — register concrete agents
     agent_registry = AgentRegistry()
     _register_agents(
-        agent_registry, settings, litellm_client, notification_service, config_dir
+        agent_registry, settings, litellm_client, notification_service, config_dir, db
     )
 
     # 8. Orchestrator
@@ -256,6 +256,7 @@ def _register_agents(
     litellm_client: LiteLLMClient,
     notification_service: NotificationService,
     config_dir: Path,
+    db: Database,
 ) -> None:
     """Register all concrete agents that are enabled in config."""
     # Calendar agent
@@ -293,3 +294,21 @@ def _register_agents(
             registry.register(agent, cur_config)
         except Exception as e:
             log.warning("curator_agent_init_failed", error=str(e))
+
+    # Tasks agent (household chores with shame mode)
+    tasks_config = settings.agents.get("tasks")
+    if tasks_config and tasks_config.enabled:
+        try:
+            from alfred.agents.calendar.agent import CalendarConfig
+            from alfred.agents.tasks.agent import TasksAgent
+
+            tz_name = CalendarConfig(config_dir).timezone
+            agent = TasksAgent(
+                db=db,
+                litellm_client=litellm_client,
+                notification_service=notification_service,
+                timezone_name=tz_name,
+            )
+            registry.register(agent, tasks_config)
+        except Exception as e:
+            log.warning("tasks_agent_init_failed", error=str(e))

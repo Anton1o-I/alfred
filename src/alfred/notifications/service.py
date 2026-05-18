@@ -83,20 +83,28 @@ class NotificationService:
         request_id: str = "",
         from_name: str | None = None,
         agent_name: str | None = None,
+        force_user_ids: list[str] | None = None,
     ) -> list[NotificationResult]:
         """Send a notification to all family members via their preferred channel.
 
         When `agent_name` is set, recipients whose `subscriptions` list is
         non-empty and does NOT contain that agent are skipped. Empty
         subscriptions = subscribed to everything (default).
+
+        `force_user_ids` overrides subscription filtering for the listed
+        users — they receive the message even if they'd normally be skipped.
+        Used by the tasks-shame routing to CC a spouse who isn't otherwise
+        subscribed to the daily briefing.
         """
         metadata = {"from_name": from_name} if from_name else {}
+        forced = set(force_user_ids or [])
         results = []
         for recipient in self._config.recipients:
             if (
                 agent_name
                 and recipient.subscriptions
                 and agent_name not in recipient.subscriptions
+                and recipient.user_id not in forced
             ):
                 continue
             notification = Notification(

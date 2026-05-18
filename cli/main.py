@@ -105,16 +105,30 @@ async def _run_simulation(
             click.echo(f"No scenario found matching name: {scenario_name}")
             return
 
-    app = await _get_app()
+    # Build only what we need (LiteLLMClient) — avoid opening the real
+    # data/alfred.db so the simulate command can run alongside the
+    # scheduler without contention.
+    import os
+
+    from alfred.core.config import init_settings
+    from alfred.observability import init_observability
+    from alfred.routing.clients import LiteLLMClient
+
+    settings = init_settings(Path("config"))
+    init_observability()
+    litellm_client = LiteLLMClient(
+        base_url=settings.litellm.base_url,
+        api_key=os.environ.get(settings.litellm.api_key_env, ""),
+    )
     try:
         results = await run_scenarios(
             scenarios,
-            litellm_client=app.litellm_client,
+            litellm_client=litellm_client,
             verbose=verbose,
         )
         print_report(results)
     finally:
-        await app.shutdown()
+        await litellm_client.close()
 
 
 @main.command()

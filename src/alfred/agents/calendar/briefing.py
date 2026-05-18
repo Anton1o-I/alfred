@@ -295,6 +295,8 @@ def _render_email(
     events_section_plain: str,
     events_section_html: str,
     observations: list[str],
+    chores_section_plain: str | None = None,
+    chores_section_html: str | None = None,
 ) -> tuple[str, str]:
     """Shared render shape for daily + weekly."""
     # Plain
@@ -307,6 +309,11 @@ def _render_email(
         "─" * 30,
         events_section_plain,
     ]
+    if chores_section_plain:
+        plain_parts.append("")
+        plain_parts.append("Chores")
+        plain_parts.append("─" * 30)
+        plain_parts.append(chores_section_plain)
     if observations:
         plain_parts.append("")
         plain_parts.append("Observations")
@@ -351,6 +358,9 @@ def _render_email(
         f'<h2 style="{section_h_style}">Events</h2>',
         events_section_html,
     ]
+    if chores_section_html:
+        parts.append(f'<h2 style="{section_h_style}">Chores</h2>')
+        parts.append(chores_section_html)
     if observations:
         parts.append(f'<h2 style="{section_h_style}">Observations</h2>')
         parts.append(f'<ul style="{obs_list_style}">')
@@ -452,7 +462,7 @@ def _render_weekly_events_html(by_day: dict[str, list[dict]], tz: ZoneInfo) -> s
 
 
 async def run_daily_briefing(app: App) -> dict:
-    """Fetch tomorrow's events and email a friendly briefing to the family."""
+    """Fetch tomorrow's events + chore status and email a unified briefing."""
     timezone_name = _calendar_timezone(app)
     tz = ZoneInfo(timezone_name)
     now_local = datetime.now(tz)
@@ -461,28 +471,100 @@ async def run_daily_briefing(app: App) -> dict:
     end = start + timedelta(days=1)
 
     events = _fetch_events_for_window(app, start, end)
-    log.info("daily_briefing_fetch", events=len(events), date=tomorrow.isoformat())
-    if not events:
+    chore_data = await _fetch_chore_data(app, now_local, tz)
+    log.info(
+        "daily_briefing_fetch",
+        events=len(events),
+        chores_overdue=len(chore_data["categorized"]["overdue"]),
+        chores_due_today=len(chore_data["categorized"]["due_today"]),
+        chores_due_tomorrow=len(chore_data["categorized"]["due_tomorrow"]),
+        date=tomorrow.isoformat(),
+    )
+
+    has_chores_to_show = bool(
+        chore_data["categorized"]["overdue"]
+        or chore_data["categorized"]["due_today"]
+        or chore_data["categorized"]["due_tomorrow"]
+    )
+    if not events and not has_chores_to_show:
         log.info("daily_briefing_skip_empty", date=tomorrow.isoformat())
-        return {"events": 0, "emailed": False}
+        return {"events": 0, "chores": 0, "emailed": False}
 
     analysis = analyze_day(events, tz)
-    narrative = await _generate_daily_narrative(app, tomorrow, events, analysis, tz)
+    narrative = await _generate_daily_narrative(
+        app, tomorrow, events, analysis, tz, chore_data["categorized"]
+    )
 
     events_plain = _render_events_plain(events, tz)
     events_html = _render_events_html(events, tz)
     headline = f"TOMORROW · {tomorrow.strftime('%a, %B %-d')}"
+
+    chores_plain: str | None = None
+    chores_html: str | None = None
+    if has_chores_to_show:
+        from alfred.notifications.tasks_render import (
+            render_chores_html,
+            render_chores_plain,
+        )
+
+        chores_plain = render_chores_plain(chore_data["categorized"])
+        chores_html = render_chores_html(chore_data["categorized"])
+
     plain, html = _render_email(
         headline=headline,
         narrative=narrative,
         events_section_plain=events_plain,
         events_section_html=events_html,
         observations=narrative.observations,
+        chores_section_plain=chores_plain,
+        chores_section_html=chores_html,
     )
     subject = f"Tomorrow's schedule — {_fmt_short_date(tomorrow)}"
-    await _send(app, subject, plain, html)
-    log.info("daily_briefing_sent", date=tomorrow.isoformat(), events=len(events))
-    return {"events": len(events), "emailed": True}
+    await _send(app, subject, plain, html, force_user_ids=chore_data["shame_user_ids"])
+    log.info(
+        "daily_briefing_sent",
+        date=tomorrow.isoformat(),
+        events=len(events),
+        chores_shown=sum(
+            len(chore_data["categorized"][k])
+            for k in ("overdue", "due_today", "due_tomorrow")
+        ),
+        shame_user_ids=chore_data["shame_user_ids"],
+    )
+    return {
+        "events": len(events),
+        "chores": sum(
+            len(chore_data["categorized"][k])
+            for k in ("overdue", "due_today", "due_tomorrow")
+        ),
+        "emailed": True,
+    }
+
+
+async def _fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict:
+    """Pull chore statuses from the tasks agent's store (if registered).
+
+    Returns categorized status buckets + the list of user_ids that should be
+    force-CC'd because at least one of their chores is past `shame_after_days`.
+    Returns empty data when the tasks agent isn't enabled.
+    """
+    from alfred.notifications.tasks_render import categorize_statuses, shame_assignees
+
+    empty = {
+        "categorized": {"overdue": [], "due_today": [], "due_tomorrow": [], "later": []},
+        "shame_user_ids": [],
+    }
+    tasks_agent = app.agent_registry.get("tasks")
+    if tasks_agent is None:
+        return empty
+    try:
+        statuses = await tasks_agent.store.status_for_all_active(now=now_local, tz=tz)
+    except Exception as e:  # noqa: BLE001
+        log.warning("daily_briefing_chores_fetch_failed", error=str(e))
+        return empty
+    categorized = categorize_statuses(statuses)
+    shame_ids = sorted(shame_assignees(statuses))
+    return {"categorized": categorized, "shame_user_ids": shame_ids}
 
 
 async def run_weekly_preview(app: App) -> dict:
@@ -549,21 +631,43 @@ def _calendar_timezone(app: App) -> str:
 
 
 async def _generate_daily_narrative(
-    app: App, day: date, events: list[dict], analysis: dict, tz: ZoneInfo
+    app: App,
+    day: date,
+    events: list[dict],
+    analysis: dict,
+    tz: ZoneInfo,
+    categorized_chores: dict | None = None,
 ) -> DailyNarrative:
     agent = _make_narrative_agent(app.litellm_client, DailyNarrative, "local-default")
     events_block = _render_events_plain(events, tz)
-    prompt = _DAILY_PROMPT.format(
-        label=day.strftime("%A, %B %-d, %Y"),
-        tz=tz.key,
-        event_count=analysis["event_count"],
-        events_block=events_block,
-        total_minutes=analysis["total_minutes"],
-        first_start=analysis["first_start"] or "—",
-        last_end=analysis["last_end"] or "—",
-        open_blocks=analysis["open_blocks"] or "(none)",
-        tight_transitions=analysis["tight_transitions"] or "(none)",
-        has_lunch=analysis["has_lunch_window"],
+    chores_summary = "(none tracked)"
+    if categorized_chores:
+        bits = []
+        if categorized_chores["overdue"]:
+            worst = max(s.overdue_days for s in categorized_chores["overdue"])
+            bits.append(f"{len(categorized_chores['overdue'])} overdue (worst {worst}d)")
+        if categorized_chores["due_today"]:
+            bits.append(f"{len(categorized_chores['due_today'])} due today")
+        if categorized_chores["due_tomorrow"]:
+            bits.append(f"{len(categorized_chores['due_tomorrow'])} due tomorrow")
+        if bits:
+            chores_summary = ", ".join(bits)
+    prompt = (
+        _DAILY_PROMPT.format(
+            label=day.strftime("%A, %B %-d, %Y"),
+            tz=tz.key,
+            event_count=analysis["event_count"],
+            events_block=events_block,
+            total_minutes=analysis["total_minutes"],
+            first_start=analysis["first_start"] or "—",
+            last_end=analysis["last_end"] or "—",
+            open_blocks=analysis["open_blocks"] or "(none)",
+            tight_transitions=analysis["tight_transitions"] or "(none)",
+            has_lunch=analysis["has_lunch_window"],
+        )
+        + f"\n\nChore burden: {chores_summary}.\n"
+        "If chores are overdue or due tomorrow, briefly acknowledge them in the "
+        "summary or as an observation — do not invent any."
     )
     result = await agent.run(prompt)
     return result.output
@@ -593,7 +697,13 @@ async def _generate_weekly_narrative(
     return result.output
 
 
-async def _send(app: App, subject: str, plain: str, html: str) -> None:
+async def _send(
+    app: App,
+    subject: str,
+    plain: str,
+    html: str,
+    force_user_ids: list[str] | None = None,
+) -> None:
     from alfred.notifications.signature import append_to_body, append_to_html, render_signature
 
     cfg = app.settings.notifications
@@ -608,4 +718,5 @@ async def _send(app: App, subject: str, plain: str, html: str) -> None:
         html_body=html_final,
         from_name=from_name,
         agent_name="calendar",
+        force_user_ids=force_user_ids,
     )

@@ -70,8 +70,8 @@ podcast:
   max_retries: 2
 
 tasks:
-  description: "Household task tracking, chore scheduling, and maintenance reminders"
-  enabled: false
+  description: "Household chore tracking with recurring schedules, completion history, and shame mode"
+  enabled: true
   allowed_tools:
     - task_list_read
     - task_list_write

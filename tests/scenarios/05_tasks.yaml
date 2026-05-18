@@ -1,0 +1,555 @@
+# Tasks-agent scenarios — 7 categories × 5 cases each (35 total).
+# Real LLM, in-memory SQLite DB. Today is pinned per scenario.
+#
+# Categories: create-recurring, create-once, dedup, complete, list, delete, update.
+
+# ─────────────────────────────────────────────────────────────────────────
+# CREATE — recurring chores (schedule + completion based)
+# ─────────────────────────────────────────────────────────────────────────
+
+- name: create_weekly_tuesday
+  kind: tasks
+  email: |
+    Add chore: take out the trash every Tuesday, household.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    # Title normalizer should strip the article: "Take out the trash" → "Take out trash".
+    reply_contains: ["Take out trash"]
+    reply_excludes: ["Take out the trash"]
+
+- name: create_daily_simple
+  kind: tasks
+  email: |
+    New chore: water the plants every day, primary owns it.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["water"]
+
+- name: create_every_other_week
+  kind: tasks
+  email: |
+    Track a household chore: vacuum the living room every other Saturday.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["vacuum"]
+
+- name: create_monthly
+  kind: tasks
+  email: |
+    Add a monthly chore: change the HVAC filter, household.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["hvac", "filter"]
+
+- name: create_completion_based
+  kind: tasks
+  email: |
+    Add chore: mow the lawn every 10 days after I last did it, secondary.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["mow"]
+
+# ─────────────────────────────────────────────────────────────────────────
+# CREATE — one-time tasks with a set due date
+# ─────────────────────────────────────────────────────────────────────────
+
+- name: once_pick_up_drycleaning_friday
+  kind: tasks
+  email: |
+    Add a one-time task: pick up the dry cleaning this Friday.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["dry cleaning", "one-time"]
+
+- name: once_call_plumber_tomorrow
+  kind: tasks
+  email: |
+    One-off task: call the plumber tomorrow. Primary will do it.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["plumber", "one-time"]
+
+- name: once_pay_rent_specific_date
+  kind: tasks
+  email: |
+    Add a task for June 1st: pay the rent. Household.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["rent", "one-time"]
+
+- name: once_take_car_for_inspection_next_wednesday
+  kind: tasks
+  email: |
+    Add a one-time task: take the car in for inspection next Wednesday.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["inspection", "one-time"]
+
+- name: once_return_amazon_package_saturday
+  kind: tasks
+  email: |
+    One-time chore: drop off the Amazon return at the UPS store this Saturday.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: created
+    active_count_after: 1
+    reply_contains: ["amazon", "one-time"]
+
+# ─────────────────────────────────────────────────────────────────────────
+# DEDUP — duplicate detection, including bathroom distinction
+# ─────────────────────────────────────────────────────────────────────────
+
+- name: dedup_slam_dunk_paraphrase
+  kind: tasks
+  email: |
+    New chore: take the trash out every week on Tuesday.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+  expect:
+    outcome: duplicate_existing
+    active_count_after: 1
+    reply_contains: ["already"]
+
+- name: dedup_main_vs_hallway_bathroom_distinct
+  kind: tasks
+  email: |
+    Add chore: clean the hallway bathroom every Saturday, household.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-main-bathroom
+      title: "Clean main bathroom"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  # Both are bathroom-cleaning chores but they target different rooms —
+  # the agent should treat them as distinct, not a duplicate.
+  expect:
+    outcome: created
+    active_count_after: 2
+
+- name: dedup_master_vs_kids_bathroom_distinct
+  kind: tasks
+  email: |
+    New chore: scrub the kids' bathroom every Sunday, secondary.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-master-bathroom
+      title: "Clean master bathroom"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SU] }
+  expect:
+    outcome: created
+    active_count_after: 2
+
+- name: dedup_same_bathroom_different_wording
+  kind: tasks
+  email: |
+    Add: wipe down the main bathroom every Saturday, household.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-main-bathroom
+      title: "Clean main bathroom"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  # Both describe cleaning the SAME room — should be flagged as duplicate
+  # despite the verb difference ("wipe down" vs "clean").
+  expect:
+    active_count_after: 1
+    reply_contains: ["already"]
+
+- name: dedup_kitchen_vs_kitchen_counters_distinct
+  kind: tasks
+  email: |
+    Add chore: wipe down the kitchen counters every evening, household.
+  today: "2026-05-17"
+  initial_chores:
+    - id: deep-clean-kitchen
+      title: "Deep clean kitchen"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  # Daily counter wipe is genuinely different from a weekly deep clean.
+  expect:
+    outcome: created
+    active_count_after: 2
+
+# ─────────────────────────────────────────────────────────────────────────
+# COMPLETE — marking chores done
+# ─────────────────────────────────────────────────────────────────────────
+
+- name: complete_unique_match_trash
+  kind: tasks
+  email: |
+    Just took out the trash.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+  expect:
+    outcome: completed
+    completion_count_after: 1
+    completed_chore_id: take-out-trash
+
+- name: complete_by_id_reference
+  kind: tasks
+  email: |
+    Done with chore "bathrooms".
+  today: "2026-05-17"
+  initial_chores:
+    - id: bathrooms
+      title: "Clean bathrooms"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: completed
+    completion_count_after: 1
+    completed_chore_id: bathrooms
+
+- name: complete_specific_bathroom_main
+  kind: tasks
+  email: |
+    Finished cleaning the main bathroom.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-main-bathroom
+      title: "Clean main bathroom"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+    - id: clean-hallway-bathroom
+      title: "Clean hallway bathroom"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  # Must pick the MAIN bathroom, not the hallway one.
+  expect:
+    outcome: completed
+    completion_count_after: 1
+    completed_chore_id: clean-main-bathroom
+
+- name: complete_completion_based_resets_clock
+  kind: tasks
+  email: |
+    Just mowed the lawn.
+  today: "2026-05-17"
+  initial_chores:
+    - id: mow-lawn
+      title: "Mow the lawn"
+      assignee: primary
+      recurrence_type: completion
+      recurrence_rule: { frequency: DAILY, interval: 10 }
+      created_at: "2026-04-01 00:00:00"
+  expect:
+    outcome: completed
+    completion_count_after: 1
+    completed_chore_id: mow-lawn
+
+- name: complete_no_active_chores
+  kind: tasks
+  email: |
+    Took out the trash this morning.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: target_not_found
+    completion_count_after: 0
+    reply_contains: ["couldn't find"]
+
+# ─────────────────────────────────────────────────────────────────────────
+# LIST — querying status
+# ─────────────────────────────────────────────────────────────────────────
+
+- name: list_multiple_active
+  kind: tasks
+  email: |
+    What chores do I have pending right now?
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+    - id: clean-bathrooms
+      title: "Clean bathrooms"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: listed
+    reply_contains: ["trash", "bathrooms"]
+
+- name: list_empty
+  kind: tasks
+  email: |
+    What's on the chore list?
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: listed
+    reply_contains: ["no chores"]
+
+- name: list_with_overdue
+  kind: tasks
+  email: |
+    Show me what's pending and what's overdue.
+  today: "2026-05-17"
+  initial_chores:
+    - id: mow-lawn
+      title: "Mow the lawn"
+      assignee: primary
+      recurrence_type: completion
+      recurrence_rule: { frequency: DAILY, interval: 7 }
+      created_at: "2026-05-01 00:00:00"
+  expect:
+    outcome: listed
+    reply_contains: ["mow", "overdue"]
+
+- name: list_shows_specific_bathrooms_separately
+  kind: tasks
+  email: |
+    What chores are pending?
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-main-bathroom
+      title: "Clean main bathroom"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+    - id: clean-hallway-bathroom
+      title: "Clean hallway bathroom"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SU] }
+  expect:
+    outcome: listed
+    reply_contains: ["main bathroom", "hallway bathroom"]
+
+- name: list_includes_one_time_tasks
+  kind: tasks
+  email: |
+    What's on my chore list?
+  today: "2026-05-17"
+  initial_chores:
+    - id: pick-up-drycleaning
+      title: "Pick up the dry cleaning"
+      assignee: primary
+      recurrence_type: once
+      recurrence_rule: {}
+      due_date: "2026-05-22"
+  expect:
+    outcome: listed
+    reply_contains: ["dry cleaning"]
+
+# ─────────────────────────────────────────────────────────────────────────
+# DELETE — removing chores
+# ─────────────────────────────────────────────────────────────────────────
+
+- name: delete_unique_match
+  kind: tasks
+  email: |
+    Stop tracking the trash chore — we hired a service.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+  expect:
+    outcome: deleted
+    active_count_after: 0
+    chore_active:
+      take-out-trash: false
+
+- name: delete_not_found
+  kind: tasks
+  email: |
+    Remove the lawn-mowing chore from tracking.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+  expect:
+    outcome: target_not_found
+    active_count_after: 1
+    reply_contains: ["couldn't find"]
+
+- name: delete_specific_bathroom_main
+  kind: tasks
+  email: |
+    Stop tracking the main bathroom cleaning — we hired a cleaner for that one.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-main-bathroom
+      title: "Clean main bathroom"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+    - id: clean-hallway-bathroom
+      title: "Clean hallway bathroom"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: deleted
+    active_count_after: 1
+    chore_active:
+      clean-main-bathroom: false
+      clean-hallway-bathroom: true
+
+- name: delete_one_time_task
+  kind: tasks
+  email: |
+    Cancel the dry cleaning pickup task — I already did it yesterday.
+  today: "2026-05-17"
+  initial_chores:
+    - id: pick-up-drycleaning
+      title: "Pick up the dry cleaning"
+      assignee: primary
+      recurrence_type: once
+      recurrence_rule: {}
+      due_date: "2026-05-22"
+  expect:
+    outcome: deleted
+    active_count_after: 0
+
+- name: delete_empty_state
+  kind: tasks
+  email: |
+    Remove the recycling chore please.
+  today: "2026-05-17"
+  initial_chores: []
+  expect:
+    outcome: target_not_found
+    active_count_after: 0
+
+# ─────────────────────────────────────────────────────────────────────────
+# UPDATE — changing chore details
+# ─────────────────────────────────────────────────────────────────────────
+
+- name: update_assignee
+  kind: tasks
+  email: |
+    Reassign the trash chore to secondary going forward.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+  expect:
+    outcome: updated
+    active_count_after: 1
+    reply_contains: ["secondary"]
+
+- name: update_recurrence_interval
+  kind: tasks
+  email: |
+    Change the bathroom cleaning to every other Saturday instead of every week.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-bathrooms
+      title: "Clean bathrooms"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  expect:
+    outcome: updated
+    active_count_after: 1
+
+- name: update_specific_bathroom_recurrence
+  kind: tasks
+  email: |
+    For the hallway bathroom chore — switch it to every Sunday.
+  today: "2026-05-17"
+  initial_chores:
+    - id: clean-main-bathroom
+      title: "Clean main bathroom"
+      assignee: primary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+    - id: clean-hallway-bathroom
+      title: "Clean hallway bathroom"
+      assignee: secondary
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [SA] }
+  # Must update the HALLWAY bathroom, not main.
+  expect:
+    outcome: updated
+    active_count_after: 2
+
+- name: update_shame_threshold
+  kind: tasks
+  email: |
+    For the trash chore: bump the shame threshold to 5 days overdue.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+      shame_after_days: 3
+  expect:
+    outcome: updated
+    active_count_after: 1
+    reply_contains: ["5"]
+
+- name: update_nonexistent_chore
+  kind: tasks
+  email: |
+    For the lawn-mowing chore: change assignee to primary.
+  today: "2026-05-17"
+  initial_chores:
+    - id: take-out-trash
+      title: "Take out trash"
+      assignee: household
+      recurrence_type: schedule
+      recurrence_rule: { frequency: WEEKLY, interval: 1, byday: [TU] }
+  expect:
+    outcome: target_not_found
+    active_count_after: 1
