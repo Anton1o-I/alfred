@@ -26,7 +26,7 @@ import structlog
 from opentelemetry import trace
 from pydantic import BaseModel, Field
 
-from alfred.notifications.shame_prompts import ROAST_SYSTEM, build_roast_prompt
+from alfred.specialists.shame.prompts import ROAST_SYSTEM, build_roast_prompt
 
 log = structlog.get_logger()
 _tracer = trace.get_tracer("alfred.notifications.shame_roast")

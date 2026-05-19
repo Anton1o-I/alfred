@@ -11,12 +11,12 @@ from typing import Any
 
 import pytest
 
-from alfred.notifications.shame_prompts import (
+from alfred.specialists.shame.prompts import (
     ROAST_FEW_SHOT,
     ROAST_SYSTEM,
     build_roast_prompt,
 )
-from alfred.notifications.shame_specialist import (
+from alfred.specialists.shame.specialist import (
     ChoreRoastInput,
     _parse_response,
     _trim,

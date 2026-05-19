@@ -670,11 +670,11 @@ async def _generate_chore_roasts(
     chore to the static `fallback_label`). Skipped entirely when no
     overdue chore qualifies for a shame tier (tier ≥ 1).
     """
-    from alfred.notifications.shame_specialist import (
+    from alfred.notifications.tasks_render import shame_tier
+    from alfred.specialists.shame.specialist import (
         ChoreRoastInput,
         generate_roasts,
     )
-    from alfred.notifications.tasks_render import shame_tier
 
     inputs: list[ChoreRoastInput] = []
     for s in overdue:

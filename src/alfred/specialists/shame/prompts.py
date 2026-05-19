@@ -21,7 +21,7 @@ import random
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from alfred.notifications.shame_specialist import ChoreRoastInput
+    from alfred.specialists.shame.specialist import ChoreRoastInput
 
 
 # Number of few-shot examples to include per call. The pool is larger
