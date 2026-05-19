@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from alfred.notifications.tasks_render import (
+from alfred.agents.tasks.renderers import (
     TIER_NONE,
     ShameTierTable,
     _should_split_for_shame,

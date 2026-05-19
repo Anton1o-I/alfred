@@ -32,16 +32,16 @@ from alfred.agents.calendar.briefing import (
     _render_events_plain,
     analyze_day,
 )
+from alfred.agents.tasks.renderers import (
+    categorize_statuses,
+    render_chores_html,
+    render_chores_plain,
+)
 from alfred.agents.tasks.store import Chore, ChoreStatus
 from alfred.notifications.signature import (
     append_to_body,
     append_to_html,
     render_signature,
-)
-from alfred.notifications.tasks_render import (
-    categorize_statuses,
-    render_chores_html,
-    render_chores_plain,
 )
 from alfred.routing.clients import LiteLLMClient
 

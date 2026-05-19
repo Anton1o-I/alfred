@@ -42,9 +42,9 @@ from alfred.agents.tasks.prompts import (
     format_existing_block,
     name_mapping_block,
 )
+from alfred.agents.tasks.renderers import render_reply_html, render_reply_plain
 from alfred.agents.tasks.replies import build_payload, resolve_outcome
 from alfred.agents.tasks.specialists import SpecialistRegistry
-from alfred.notifications.tasks_render import render_reply_html, render_reply_plain
 
 if TYPE_CHECKING:
     from alfred.agents.tasks.store import ChoreStore

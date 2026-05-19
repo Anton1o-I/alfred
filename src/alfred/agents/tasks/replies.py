@@ -17,7 +17,7 @@ from typing import Any
 
 from alfred.agents.tasks.formatting import format_incomplete_text, format_recurrence_human
 from alfred.agents.tasks.outcomes import SUCCESS_OUTCOMES, Outcome
-from alfred.notifications.tasks_render import ReplyPayload
+from alfred.agents.tasks.renderers import ReplyPayload
 
 # Assignee slot → fallback label when no display name is configured.
 _ASSIGNEE_FALLBACKS: dict[str, str] = {

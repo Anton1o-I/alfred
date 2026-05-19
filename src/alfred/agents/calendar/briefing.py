@@ -571,7 +571,7 @@ async def run_daily_briefing(app: App) -> dict:
     events_html = _render_events_html(events, tz)
     headline = f"TOMORROW · {tomorrow.strftime('%a, %B %-d')}"
 
-    from alfred.notifications.tasks_render import (
+    from alfred.agents.tasks.renderers import (
         ShameTierTable,
         render_chores_html,
         render_chores_plain,
@@ -670,7 +670,7 @@ async def _generate_chore_roasts(
     chore to the static `fallback_label`). Skipped entirely when no
     overdue chore qualifies for a shame tier (tier ≥ 1).
     """
-    from alfred.notifications.tasks_render import shame_tier
+    from alfred.agents.tasks.renderers import shame_tier
     from alfred.specialists.shame.specialist import (
         ChoreRoastInput,
         generate_roasts,
@@ -716,7 +716,7 @@ async def _fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict
     force-CC'd because at least one of their chores is past `shame_after_days`.
     Returns empty data when the tasks agent isn't enabled.
     """
-    from alfred.notifications.tasks_render import (
+    from alfred.agents.tasks.renderers import (
         ShameTierTable,
         _should_split_for_shame,
         categorize_statuses,
@@ -980,15 +980,15 @@ async def _send_shame_email(
     the visual treatment matches what users see inside the briefing's
     chore section, just with a different envelope and persona.
     """
+    from alfred.agents.tasks.renderers import (
+        render_chores_html,
+        render_chores_plain,
+    )
     from alfred.core.persona import Persona, resolve_persona
     from alfred.notifications.signature import (
         append_to_body,
         append_to_html,
         render_signature,
-    )
-    from alfred.notifications.tasks_render import (
-        render_chores_html,
-        render_chores_plain,
     )
 
     cfg = app.settings.notifications

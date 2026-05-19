@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from alfred.core.persona import Persona, resolve_persona
-from alfred.notifications.tasks_render import (
+from alfred.agents.tasks.renderers import (
     ShameTierTable,
     render_chores_html,
     render_chores_plain,
