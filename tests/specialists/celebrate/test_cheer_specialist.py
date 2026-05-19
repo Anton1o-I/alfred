@@ -46,10 +46,13 @@ def test_build_cheer_prompt_includes_title_and_json_instruction() -> None:
 
 def test_system_prompt_calls_out_voice_rules() -> None:
     assert "ONE line" in CHEER_SYSTEM
-    assert "80 characters" in CHEER_SYSTEM
+    assert "95 characters" in CHEER_SYSTEM
     assert "JSON" in CHEER_SYSTEM
     # Reverse-roast directive is the core voice rule — guard against drift.
     assert "REVERSE" in CHEER_SYSTEM
+    # Affirmation prefix is mandatory; guard against drift.
+    assert "Well done" in CHEER_SYSTEM
+    assert "Bravo" in CHEER_SYSTEM
 
 
 def test_few_shot_covers_diverse_categories() -> None:

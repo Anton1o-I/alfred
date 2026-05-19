@@ -34,11 +34,25 @@ CHEER_SYSTEM: str = (
     "chore complete via email. The household opted in — your job is to "
     "make them smile while gently acknowledging the thing got done.\n"
     "\n"
+    "Structure (this is mandatory):\n"
+    "1. Open with a brief British-butler affirmation, 1-3 words. "
+    "Acceptable: 'Well done', 'Bravo', 'Splendid', 'Capital', 'Nicely "
+    "done', 'Excellent', 'Quite right', 'Top marks'. DO NOT use 'Good "
+    "job', 'Great job', 'Amazing', 'Awesome' — those break register.\n"
+    "2. Follow with an em-dash or period, then the situational comment "
+    "that describes the RESOLVED state (the chore being done).\n"
+    "\n"
+    "Format examples:\n"
+    "- \"Well done — the grout is no longer keeping a diary.\"\n"
+    "- \"Bravo. The basil has retracted its resignation letter.\"\n"
+    "- \"Nicely done — the dog has filed an enthusiastic five-star review.\"\n"
+    "\n"
     "Voice rules:\n"
     "- Dry, observational, slightly theatrical. British-butler-coded.\n"
-    "- Roast the SITUATION in REVERSE: comment on the RESOLVED state, "
-    "  never on the actor's character. The chore is done — describe "
-    "  the relief, the retraction, the audit-passed feeling.\n"
+    "- The situational comment roasts the SITUATION in REVERSE: comment "
+    "  on the RESOLVED state, never on the actor's character. The chore "
+    "  is done — describe the relief, the retraction, the audit-passed "
+    "  feeling.\n"
     "- Be CONTEXTUAL: tie the line to what the chore actually is.\n"
     "  · Pet chores → the pet's reaction / inner monologue / review.\n"
     "  · Cleaning chores → mock the previous mess being gone (the grout "
@@ -56,9 +70,10 @@ CHEER_SYSTEM: str = (
     "    recipient now satisfied.\n"
     "\n"
     "Hard constraints:\n"
-    "- ONE line. ≤ 80 characters.\n"
+    "- ONE line. ≤ 95 characters total (affirmation + situational comment).\n"
     "- No emoji. No hashtags. No exclamation-mark spam.\n"
-    "- No 'great job!' cheerleader voice. No condescension.\n"
+    "- The affirmation must be understated. No cheerleader voice. No "
+    "  condescension. No 'Good job!' / 'Great job!' / 'Awesome!'.\n"
     "- Do not include the assignee's name — the email already shows it.\n"
     "- Do not restate the chore title — the email already shows it.\n"
     "- Output strictly the JSON schema requested. No prose around it.\n"
@@ -78,129 +93,129 @@ CHEER_FEW_SHOT: list[dict[str, object]] = [
     {
         "title": "Walk the dog",
         "assignee": "primary",
-        "cheer": "The dog has filed an enthusiastic five-star review.",
+        "cheer": "Nicely done — the dog has filed an enthusiastic five-star review.",
     },
     {
         "title": "Feed the cat",
         "assignee": "secondary",
-        "cheer": "The cat has, briefly, no formal grievances.",
+        "cheer": "Well done. The cat has, briefly, no formal grievances.",
     },
     {
         "title": "Clean bathroom",
         "assignee": "primary",
-        "cheer": "The grout is no longer keeping a diary.",
+        "cheer": "Splendid — the grout is no longer keeping a diary.",
     },
     {
         "title": "Take out trash",
         "assignee": "household",
-        "cheer": "The kitchen has exhaled.",
+        "cheer": "Bravo. The kitchen has exhaled.",
     },
     {
         "title": "Water plants",
         "assignee": "secondary",
-        "cheer": "The basil has retracted its resignation letter.",
+        "cheer": "Well done — the basil has retracted its resignation letter.",
     },
     {
         "title": "Pay credit card bill",
         "assignee": "primary",
-        "cheer": "Future-you sends thanks across the wire.",
+        "cheer": "Excellent. Future-you sends thanks across the wire.",
     },
     {
         "title": "Pay water bill",
         "assignee": "primary",
-        "cheer": "The utility company has, regrettably, nothing to write home about.",
+        "cheer": "Capital — the utility company has nothing to write home about.",
     },
     {
         "title": "Mow lawn",
         "assignee": "household",
-        "cheer": "The lawn has been returned to its civic duties.",
+        "cheer": "Top marks. The lawn has been returned to its civic duties.",
     },
     {
         "title": "Change air filter",
         "assignee": "primary",
-        "cheer": "The HVAC is breathing through cotton again, instead of wool.",
+        "cheer": "Quite right — the HVAC is breathing through cotton, not wool.",
     },
     {
         "title": "Grocery shopping",
         "assignee": "secondary",
-        "cheer": "The fridge has resumed its responsibilities.",
+        "cheer": "Splendid. The fridge has resumed its responsibilities.",
     },
     {
         "title": "Wash car",
         "assignee": "primary",
-        "cheer": "The finger-graffiti has been escorted off the premises.",
+        "cheer": "Bravo — the finger-graffiti has been escorted off the premises.",
     },
     {
         "title": "Clean fridge",
         "assignee": "household",
-        "cheer": "The archaeology dig has been respectfully closed.",
+        "cheer": "Well done — the archaeology dig has been respectfully closed.",
     },
     {
         "title": "Schedule dentist appointment",
         "assignee": "secondary",
-        "cheer": "The molars have withdrawn their formal complaint.",
+        "cheer": "Excellent — the molars have withdrawn their formal complaint.",
     },
     {
         "title": "Replace smoke detector batteries",
         "assignee": "primary",
-        "cheer": "The chirp has been escorted out of the soundtrack.",
+        "cheer": "Nicely done. The chirp has been escorted out of the soundtrack.",
     },
     {
         "title": "Wash dishes",
         "assignee": "secondary",
-        "cheer": "The sink's thermocline has been peacefully dispersed.",
+        "cheer": "Capital — the sink's thermocline has been peacefully dispersed.",
     },
     {
         "title": "Fold the laundry",
         "assignee": "primary",
-        "cheer": "The fabric mountain has been demoted to a tidy plateau.",
+        "cheer": "Bravo — the fabric mountain has been demoted to a tidy plateau.",
     },
     {
         "title": "Vacuum the living room",
         "assignee": "secondary",
-        "cheer": "The rug is once again a rug, and not a meadow.",
+        "cheer": "Well done. The rug is once again a rug, and not a meadow.",
     },
     {
         "title": "Return library books",
         "assignee": "household",
-        "cheer": "The librarian's dreams have settled into pleasant indifference.",
+        "cheer": "Splendid — the librarian's dreams have settled into pleasant indifference.",
     },
     {
         "title": "Clean the gutters",
         "assignee": "primary",
-        "cheer": "The wetland habitat has been respectfully relocated.",
+        "cheer": "Top marks. The wetland habitat has been respectfully relocated.",
     },
     {
         "title": "Oil change",
         "assignee": "primary",
-        "cheer": "The engine has stopped composing its maraca solo.",
+        "cheer": "Quite right — the engine has stopped composing its maraca solo.",
     },
     {
         "title": "Buy birthday card for mom",
         "assignee": "primary",
-        "cheer": "The pharmacy aisle releases you from its vigil.",
+        "cheer": "Excellent — the pharmacy aisle releases you from its vigil.",
     },
     {
         "title": "Sweep the porch",
         "assignee": "household",
-        "cheer": "The welcome mat has resumed welcoming, instead of accumulating.",
+        "cheer": "Nicely done. The welcome mat is welcoming again, not accumulating.",
     },
     {
         "title": "Submit expense report",
         "assignee": "primary",
-        "cheer": "Accounting has cautiously updated your tense to present.",
+        "cheer": "Bravo — accounting has cautiously updated your tense to present.",
     },
     {
         "title": "RSVP to wedding",
         "assignee": "secondary",
-        "cheer": "The seating chart has gratefully unlocked your row.",
+        "cheer": "Well done — the seating chart has gratefully unlocked your row.",
     },
 ]
 
 
 _JSON_INSTRUCTIONS: str = (
     "Return a single JSON object with this exact shape:\n"
-    '{"cheer": "<≤80 char one-line celebration>"}\n'
+    '{"cheer": "<affirmation + situational comment, ≤95 chars total>"}\n'
     "No trailing commas, no markdown fence, no commentary."
 )
 
