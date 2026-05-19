@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from alfred.agents.calendar.outcomes import Outcome
-from alfred.notifications.calendar_render import (
+from alfred.agents.calendar.renderers import (
     render_clarification_html,
     render_clarification_plain,
     render_event_deleted_html,
