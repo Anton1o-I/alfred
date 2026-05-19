@@ -38,13 +38,12 @@ from alfred.notifications.signature import (
     append_to_html,
     render_signature,
 )
-from alfred.routines.daily_briefing import (
-    _DAILY_PROMPT,
-    DailyNarrative,
+from alfred.routines._common import (
     _make_narrative_agent,
     _render_chores_for_prompt,
     _render_email,
 )
+from alfred.routines.daily_briefing import _DAILY_PROMPT, DailyNarrative
 from alfred.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
@@ -259,7 +258,8 @@ async def _render_one(
     headline = f"TOMORROW · {scenario.tomorrow.strftime('%a, %B %-d')}"
     plain, html = _render_email(
         headline=headline,
-        narrative=narrative,
+        greeting=narrative.greeting,
+        summary=narrative.summary,
         events_section_plain=_render_events_plain(scenario.events, tz),
         events_section_html=_render_events_html(scenario.events, tz),
         observations=narrative.observations,

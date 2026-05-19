@@ -81,10 +81,8 @@ async def run_routine(
     # Calendar briefings: daily next-day reminder + Sunday week preview.
     # `task.message` selects the mode ("daily" | "weekly").
     if task.agent_name == "briefing":
-        from alfred.routines.daily_briefing import (
-            run_daily_briefing,
-            run_weekly_preview,
-        )
+        from alfred.routines.daily_briefing import run_daily_briefing
+        from alfred.routines.weekly_preview import run_weekly_preview
 
         mode = (task.message or "").strip().lower()
         if mode == "daily":

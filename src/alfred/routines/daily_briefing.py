@@ -1,27 +1,26 @@
-"""Daily next-day briefing + Sunday weekly preview routine.
+"""Daily next-day briefing routine.
 
 Linear pipeline (no LangGraph — no branching):
 
-  fetch_events (CalDAV)
+  fetch_events (CalDAV) + fetch_chore_data
        │
        ▼
-  analyze_shape (pure code — gaps, totals, lunch check, tight transitions)
+  analyze_day (pure code — gaps, totals, tight transitions)
        │
        ▼
-  generate_narrative (LLM specialist, typed DailyNarrative / WeeklyNarrative)
+  generate_daily_narrative (LLM specialist, typed DailyNarrative)
        │
        ▼
-  render (definition-list HTML + plain text with greeting + summary + observations)
+  render (shared email frame from routines/_common)
        │
        ▼
-  send (notification_service.send_to_family)
+  send + optional split "Alfred · Disappointed" shame email
 
-The LLM only generates flavor — greeting, summary sentence, observation bullets.
-All facts (event list, times, day stats) come from code. The LLM can't invent.
-
-Composes calendar event data with tasks chore data + shame tier routing. Lives in
-routines/ because it spans multiple agents; the calendar agent only provides the
-event-shape analysis helpers it imports.
+Composes calendar event data with tasks chore data + shame tier routing.
+Lives in routines/ because it spans multiple agents; the calendar agent
+only provides the event-shape analysis helpers it imports. Shared frame
++ dispatcher live in routines/_common; weekly preview lives in
+routines/weekly_preview.
 """
 
 from __future__ import annotations
@@ -32,19 +31,23 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
 from alfred.agents.calendar.briefing import (
     _fetch_events_for_window,
     _fmt_short_date,
     _render_events_html,
     _render_events_plain,
-    _render_weekly_events_html,
-    _render_weekly_events_plain,
     analyze_day,
-    analyze_week,
+)
+from alfred.routines._common import (
+    _FONT_STACK,
+    _build_assignee_names,
+    _calendar_timezone,
+    _escape,
+    _make_narrative_agent,
+    _render_chores_for_prompt,
+    _render_email,
+    _send,
 )
 
 if TYPE_CHECKING:
@@ -53,7 +56,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
-# ── LLM output schemas ────────────────────────────────────────────────────
+# ── LLM output schema ─────────────────────────────────────────────────────
 
 
 class DailyNarrative(BaseModel):
@@ -94,21 +97,7 @@ class DailyNarrative(BaseModel):
     )
 
 
-class WeeklyNarrative(BaseModel):
-    greeting: str = Field(description="Short opener, e.g. 'Week ahead'.")
-    summary: str = Field(
-        description=(
-            "2-3 sentences on the week's shape — front-loaded/back-loaded, "
-            "busiest and lightest days, total density. Facts only."
-        )
-    )
-    observations: list[str] = Field(
-        default_factory=list,
-        description="0-3 short bullets on patterns worth noting.",
-    )
-
-
-# ── Prompts ───────────────────────────────────────────────────────────────
+# ── Prompt ────────────────────────────────────────────────────────────────
 
 
 _DAILY_PROMPT = (
@@ -171,169 +160,7 @@ _DAILY_PROMPT = (
 )
 
 
-_WEEKLY_PROMPT = (
-    "You are writing a brief, friendly preview of the upcoming week's calendar.\n"
-    "\n"
-    "Week: {start_label} to {end_label}\n"
-    "Timezone: {tz}\n"
-    "\n"
-    "Events by day:\n"
-    "{events_block}\n"
-    "\n"
-    "Analysis (computed):\n"
-    "- Total events: {event_count}\n"
-    "- Total scheduled time: {total_minutes} minutes\n"
-    "- Busiest day: {busiest_day}\n"
-    "- Lightest day: {lightest_day}\n"
-    "\n"
-    "Write a short, friendly week-ahead summary. Keep facts grounded in the data. "
-    "Return a typed WeeklyNarrative."
-)
-
-
-# ── LLM specialists ───────────────────────────────────────────────────────
-
-
-def _make_narrative_agent(litellm_client, output_type: type, model_name: str) -> Agent:
-    model = OpenAIChatModel(
-        model_name=model_name,
-        provider=OpenAIProvider(
-            base_url=f"{litellm_client.base_url}/v1",
-            api_key=litellm_client._api_key,  # noqa: SLF001
-        ),
-    )
-    return Agent(model=model, output_type=output_type)
-
-
-# ── Render ────────────────────────────────────────────────────────────────
-
-
-_FONT_STACK = (
-    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, "
-    "'Helvetica Neue', Arial, sans-serif"
-)
-
-
-def _render_email(
-    *,
-    headline: str,
-    narrative: DailyNarrative | WeeklyNarrative,
-    events_section_plain: str,
-    events_section_html: str,
-    observations: list[str],
-    chores_section_plain: str | None = None,
-    chores_section_html: str | None = None,
-    lead_section: Literal["events", "chores"] = "events",
-) -> tuple[str, str]:
-    """Shared render shape for daily + weekly.
-
-    `lead_section` controls whether Events or Chores appears first. Weekly
-    previews don't have chores; they always pass lead_section='events'.
-    """
-    has_chores = bool(chores_section_plain or chores_section_html)
-    chores_lead = lead_section == "chores" and has_chores
-
-    # Plain — section order driven by lead_section. No horizontal-rule
-    # dividers under headers: Gmail mobile's "Show trimmed content"
-    # heuristic detects any line of repeated dash-like characters in the
-    # plain part as a signature/quote boundary and collapses everything
-    # below. We use uppercase-styled headers and blank-line spacing to
-    # carry the visual hierarchy in plain text instead.
-    plain_parts = [
-        narrative.greeting.strip(),
-        "",
-        narrative.summary.strip(),
-    ]
-    sections_plain: list[tuple[str, str]] = []
-    if chores_lead:
-        if chores_section_plain:
-            sections_plain.append(("Chores", chores_section_plain))
-        sections_plain.append(("Events", events_section_plain))
-    else:
-        sections_plain.append(("Events", events_section_plain))
-        if chores_section_plain:
-            sections_plain.append(("Chores", chores_section_plain))
-    for title, body in sections_plain:
-        plain_parts.append("")
-        plain_parts.append(title.upper())
-        plain_parts.append("")
-        plain_parts.append(body)
-    if observations:
-        plain_parts.append("")
-        plain_parts.append("OBSERVATIONS")
-        plain_parts.append("")
-        for obs in observations:
-            plain_parts.append(f"• {obs}")
-    plain = "\n".join(plain_parts).rstrip() + "\n"
-
-    # HTML — same section ordering.
-    body_style = (
-        "margin: 0; padding: 0; background: #f5f5f7; "
-        f"font-family: {_FONT_STACK}; color: #1d1d1f;"
-    )
-    container_style = (
-        "max-width: 560px; margin: 0 auto; padding: 32px 24px; background: #ffffff;"
-    )
-    header_style = (
-        "margin: 0 0 6px; font-size: 14px; font-weight: 600; "
-        "letter-spacing: 0.04em; text-transform: uppercase; color: #6e6e73;"
-    )
-    greeting_style = (
-        "margin: 0 0 16px; font-size: 22px; font-weight: 600; "
-        "letter-spacing: -0.01em; color: #111;"
-    )
-    summary_style = (
-        "margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #1d1d1f;"
-    )
-    # NOTE: no border-top divider. Gmail mobile's "Show trimmed content"
-    # heuristic treats horizontal-rule patterns as a signature/quote
-    # boundary and collapses everything below — losing the Events / Chores
-    # / Observations sections entirely. Use generous margin + small-caps
-    # styling for visual separation instead.
-    section_h_style = (
-        "margin: 32px 0 12px; font-size: 11px; font-weight: 600; "
-        "letter-spacing: 0.08em; text-transform: uppercase; color: #6e6e73;"
-    )
-    obs_list_style = "margin: 0; padding: 0 0 0 18px; font-size: 14px; line-height: 1.55;"
-
-    parts = [
-        '<!doctype html><html><head><meta charset="utf-8"></head>',
-        f'<body style="{body_style}">',
-        f'<div style="{container_style}">',
-        f'<p style="{header_style}">{headline}</p>',
-        f'<h1 style="{greeting_style}">{_escape(narrative.greeting)}</h1>',
-        f'<p style="{summary_style}">{_escape(narrative.summary)}</p>',
-    ]
-    sections_html: list[tuple[str, str]] = []
-    if chores_lead:
-        if chores_section_html:
-            sections_html.append(("Chores", chores_section_html))
-        sections_html.append(("Events", events_section_html))
-    else:
-        sections_html.append(("Events", events_section_html))
-        if chores_section_html:
-            sections_html.append(("Chores", chores_section_html))
-    for title, body in sections_html:
-        parts.append(f'<h2 style="{section_h_style}">{title}</h2>')
-        parts.append(body)
-    if observations:
-        parts.append(f'<h2 style="{section_h_style}">Observations</h2>')
-        parts.append(f'<ul style="{obs_list_style}">')
-        for obs in observations:
-            parts.append(f"<li>{_escape(obs)}</li>")
-        parts.append("</ul>")
-    parts.append("</div></body></html>")
-    html = "".join(parts)
-    return plain, html
-
-
-def _escape(s: str) -> str:
-    from html import escape
-
-    return escape(s or "")
-
-
-# ── Entry points ──────────────────────────────────────────────────────────
+# ── Routine ───────────────────────────────────────────────────────────────
 
 
 async def run_daily_briefing(app: App) -> dict:
@@ -427,7 +254,8 @@ async def run_daily_briefing(app: App) -> dict:
 
     plain, html = _render_email(
         headline=headline,
-        narrative=narrative,
+        greeting=narrative.greeting,
+        summary=narrative.summary,
         events_section_plain=events_plain,
         events_section_html=events_html,
         observations=narrative.observations,
@@ -582,120 +410,6 @@ async def _fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict
     }
 
 
-async def run_weekly_preview(app: App) -> dict:
-    """Sunday evening: email next-week preview to the family."""
-    timezone_name = _calendar_timezone(app)
-    tz = ZoneInfo(timezone_name)
-    now_local = datetime.now(tz)
-    # Next Monday → following Sunday inclusive
-    days_until_monday = (0 - now_local.weekday()) % 7 or 7
-    start_date = now_local.date() + timedelta(days=days_until_monday)
-    end_date = start_date + timedelta(days=7)
-    start = datetime.combine(start_date, datetime.min.time(), tzinfo=tz)
-    end = datetime.combine(end_date, datetime.min.time(), tzinfo=tz)
-
-    events = _fetch_events_for_window(app, start, end)
-    log.info(
-        "weekly_preview_fetch",
-        events=len(events),
-        start=start_date.isoformat(),
-        end=(end_date - timedelta(days=1)).isoformat(),
-    )
-
-    by_day: dict[str, list[dict]] = {
-        (start_date + timedelta(days=i)).isoformat(): [] for i in range(7)
-    }
-    for ev in events:
-        d = datetime.fromisoformat(ev["start_iso"]).astimezone(tz).date().isoformat()
-        if d in by_day:
-            by_day[d].append(ev)
-
-    if not events:
-        log.info("weekly_preview_skip_empty")
-        return {"events": 0, "emailed": False}
-
-    analysis = analyze_week(by_day)
-    narrative = await _generate_weekly_narrative(
-        app, start_date, end_date - timedelta(days=1), by_day, analysis
-    )
-
-    events_plain = _render_weekly_events_plain(by_day, tz)
-    events_html = _render_weekly_events_html(by_day, tz)
-    headline = (
-        f"WEEK AHEAD · {_fmt_short_date(start_date)} – "
-        f"{_fmt_short_date(end_date - timedelta(days=1))}"
-    )
-    plain, html = _render_email(
-        headline=headline,
-        narrative=narrative,
-        events_section_plain=events_plain,
-        events_section_html=events_html,
-        observations=narrative.observations,
-    )
-    subject = f"Week ahead — {_fmt_short_date(start_date)}"
-    await _send(app, subject, plain, html)
-    log.info("weekly_preview_sent", events=len(events))
-    return {"events": len(events), "emailed": True}
-
-
-def _calendar_timezone(app: App) -> str:
-    agent = app.agent_registry.get("calendar")
-    if agent is None:
-        return "UTC"
-    return agent._config.timezone  # noqa: SLF001
-
-
-def _build_assignee_names(app: App) -> dict[str, str]:
-    """user_id -> display name map sourced from env vars via recipient configs.
-
-    Mirrors the lookup in `app.py` for the tasks agent — keeps personal
-    names out of tracked config and lets us show "Alex" instead of
-    "primary" in chore lines.
-    """
-    import os
-
-    out: dict[str, str] = {}
-    for r in app.settings.notifications.recipients:
-        if r.name_env:
-            name = os.environ.get(r.name_env, "").strip()
-            if name:
-                out[r.user_id] = name
-    return out
-
-
-def _render_chores_for_prompt(
-    categorized: dict | None,
-    assignee_names: dict[str, str] | None = None,
-) -> str:
-    """Plain-text chore listing fed to the LLM so it can reason about specifics.
-
-    Format mirrors the rendered email so the LLM and the user see the same facts.
-    Resolving assignees here means the LLM-generated summary references real
-    names rather than the internal user_id tokens.
-    """
-    if not categorized:
-        return "(no chores tracked)"
-    buckets = (
-        ("OVERDUE", categorized.get("overdue", [])),
-        ("DUE TODAY", categorized.get("due_today", [])),
-        ("DUE TOMORROW", categorized.get("due_tomorrow", [])),
-    )
-    lines: list[str] = []
-    for label, statuses in buckets:
-        if not statuses:
-            continue
-        lines.append(label)
-        for s in statuses:
-            who = (
-                assignee_names.get(s.chore.assignee, s.chore.assignee)
-                if assignee_names
-                else s.chore.assignee
-            )
-            suffix = f" — {s.overdue_days}d overdue" if s.overdue_days > 0 else ""
-            lines.append(f"  - {s.chore.title} ({who}){suffix}")
-    return "\n".join(lines) if lines else "(no chores due in the next day)"
-
-
 async def _generate_daily_narrative(
     app: App,
     day: date,
@@ -722,55 +436,6 @@ async def _generate_daily_narrative(
     )
     result = await agent.run(prompt)
     return result.output
-
-
-async def _generate_weekly_narrative(
-    app: App,
-    start_date: date,
-    end_date: date,
-    by_day: dict[str, list[dict]],
-    analysis: dict,
-) -> WeeklyNarrative:
-    agent = _make_narrative_agent(app.litellm_client, WeeklyNarrative, "local-default")
-    tz = ZoneInfo(_calendar_timezone(app))
-    events_block = _render_weekly_events_plain(by_day, tz)
-    prompt = _WEEKLY_PROMPT.format(
-        start_label=start_date.strftime("%A %b %-d"),
-        end_label=end_date.strftime("%A %b %-d"),
-        tz=tz.key,
-        events_block=events_block,
-        event_count=analysis["event_count"],
-        total_minutes=analysis["total_minutes"],
-        busiest_day=analysis["busiest_day"] or "—",
-        lightest_day=analysis["lightest_day"] or "—",
-    )
-    result = await agent.run(prompt)
-    return result.output
-
-
-async def _send(
-    app: App,
-    subject: str,
-    plain: str,
-    html: str,
-    force_user_ids: list[str] | None = None,
-) -> None:
-    from alfred.notifications.signature import append_to_body, append_to_html, render_signature
-
-    cfg = app.settings.notifications
-    from_name = cfg.email_from_names_by_agent.get("calendar", cfg.email_from_name)
-    tagline = cfg.email_taglines_by_agent.get("calendar", "")
-    sig_plain, sig_html = render_signature(from_name or "", tagline)
-    plain_final = append_to_body(plain, sig_plain)
-    html_final = append_to_html(html, sig_html) if html else None
-    await app.notification_service.send_to_family(
-        body=plain_final,
-        subject=subject,
-        html_body=html_final,
-        from_name=from_name,
-        agent_name="calendar",
-        force_user_ids=force_user_ids,
-    )
 
 
 async def _send_shame_email(
