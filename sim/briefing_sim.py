@@ -23,11 +23,6 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from alfred.agents.calendar.briefing import (
-    _DAILY_PROMPT,
-    DailyNarrative,
-    _make_narrative_agent,
-    _render_chores_for_prompt,
-    _render_email,
     _render_events_html,
     _render_events_plain,
     analyze_day,
@@ -42,6 +37,13 @@ from alfred.notifications.signature import (
     append_to_body,
     append_to_html,
     render_signature,
+)
+from alfred.routines.daily_briefing import (
+    _DAILY_PROMPT,
+    DailyNarrative,
+    _make_narrative_agent,
+    _render_chores_for_prompt,
+    _render_email,
 )
 from alfred.routing.clients import LiteLLMClient
 
