@@ -99,7 +99,7 @@ class NotificationConfig(BaseModel):
 
     # Alternate outbound identities (e.g. "tasks-shame" → "Alfred · Disappointed").
     # Each value carries `display_name` and `tagline`. Resolved by
-    # `alfred.notifications.personas.resolve_persona`.
+    # `alfred.core.persona.resolve_persona`.
     personas: dict[str, dict[str, str]] = {}
 
     # Tasks-shame escalating-tier copy. Each entry covers a closed range of

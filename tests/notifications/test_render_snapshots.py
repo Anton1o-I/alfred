@@ -15,13 +15,12 @@ from typing import Any
 
 import pytest
 
-from alfred.notifications.personas import Persona, resolve_persona
+from alfred.core.persona import Persona, resolve_persona
 from alfred.notifications.tasks_render import (
     ShameTierTable,
     render_chores_html,
     render_chores_plain,
 )
-
 
 TIERS: list[dict[str, Any]] = [
     {"tier": 1, "min_days": 3, "max_days": 6, "fallback_label": "{days}d pending",

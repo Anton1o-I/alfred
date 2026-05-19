@@ -980,7 +980,7 @@ async def _send_shame_email(
     the visual treatment matches what users see inside the briefing's
     chore section, just with a different envelope and persona.
     """
-    from alfred.notifications.personas import Persona, resolve_persona
+    from alfred.core.persona import Persona, resolve_persona
     from alfred.notifications.signature import (
         append_to_body,
         append_to_html,

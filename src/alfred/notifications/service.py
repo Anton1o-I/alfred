@@ -9,8 +9,8 @@ import structlog
 from alfred.audit.logger import AuditLogger
 from alfred.core.config import NotificationConfig, RecipientConfig
 from alfred.core.constants import AuditEventType
+from alfred.core.persona import Persona, resolve_persona
 from alfred.notifications.models import Notification, NotificationResult
-from alfred.notifications.personas import Persona, resolve_persona
 from alfred.storage.database import Database
 
 log = structlog.get_logger()
