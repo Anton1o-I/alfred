@@ -104,6 +104,10 @@ class TasksState(TypedDict, total=False):
     outcome: str
     error_message: str
 
+    # Completion-cheer line (filled by generate_completion_cheer; "" on
+    # any failure so the renderer falls back to the static banner).
+    cheer_line: str
+
     # Reply text (filled by build_reply)
     reply_plain: str
     reply_html: str
@@ -566,6 +570,42 @@ def build_tasks_graph(
             "outcome": Outcome.COMPLETED.value,
         }
 
+    async def generate_completion_cheer(state: TasksState) -> dict[str, Any]:
+        """LLM: produce a contextual one-line celebration for the completed chore.
+
+        Fail-soft: ANY exception or empty result yields `cheer_line=""`,
+        which the renderer treats as a signal to use the static
+        "Chore completed" header. Never raises.
+        """
+        from alfred.specialists.celebrate.specialist import (
+            CompletionCheerInput,
+            generate_cheer,
+        )
+
+        completed = state.get("completed_chore") or {}
+        title = completed.get("title") or ""
+        chore_id = completed.get("id") or ""
+        assignee = completed.get("completed_by") or "household"
+        if not title or not chore_id:
+            return {"cheer_line": ""}
+        try:
+            cheer = await generate_cheer(
+                CompletionCheerInput(
+                    chore_id=str(chore_id),
+                    title=str(title),
+                    assignee=str(assignee),
+                ),
+                litellm_client,
+            )
+        except Exception as e:  # noqa: BLE001 — fail-soft per design
+            log.warning(
+                "tasks_completion_cheer_failed",
+                error=str(e),
+                chore_id=chore_id,
+            )
+            return {"cheer_line": ""}
+        return {"cheer_line": cheer}
+
     # ── Delete branch ────────────────────────────────────────────────────
 
     async def soft_delete_chore_action(state: TasksState) -> dict[str, Any]:
@@ -815,6 +855,7 @@ def build_tasks_graph(
         ("parse_target_reference", parse_target_reference),
         ("reason_about_target_match", reason_about_target_match),
         ("write_completion", write_completion),
+        ("generate_completion_cheer", generate_completion_cheer),
         ("soft_delete_chore_action", soft_delete_chore_action),
         ("parse_chore_update", parse_chore_update),
         ("apply_chore_update", apply_chore_update),
@@ -885,12 +926,15 @@ def build_tasks_graph(
         },
     )
 
+    # Completion branch routes through the cheer specialist before reply.
+    graph.add_edge("write_completion", "generate_completion_cheer")
+    graph.add_edge("generate_completion_cheer", "build_reply")
+
     # Terminal edges
     for src in (
         "write_chore",
         "mark_duplicate_high",
         "mark_duplicate_medium",
-        "write_completion",
         "soft_delete_chore_action",
         "apply_chore_update",
         "render_pending_summary",

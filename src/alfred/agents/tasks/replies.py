@@ -82,8 +82,12 @@ def _reply_created(state: dict[str, Any], name_map: dict[str, str]) -> ReplyPayl
 
 def _reply_completed(state: dict[str, Any], name_map: dict[str, str]) -> ReplyPayload:
     c = state["completed_chore"]
+    # Cheer specialist supplies a contextual one-line header. Empty string
+    # (the documented failure mode) means we fall back to the static banner.
+    cheer = (state.get("cheer_line") or "").strip()
+    header = cheer if cheer else "Chore completed"
     return ReplyPayload(
-        header="Chore completed",
+        header=header,
         title=c["title"],
         fields=[
             ("Completed by", humanize_assignee(c.get("completed_by"), name_map)),
