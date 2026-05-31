@@ -1,0 +1,80 @@
+{
+  "name": "alfred-weekly-preview",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "trigger-sunday-evening",
+      "name": "Sunday 18:00 cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8765/routines/briefing",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"mode\": \"weekly\"\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "trigger-alfred-routine",
+      "name": "POST /routines/briefing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "Alfred routine API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Sunday 18:00 cron": {
+      "main": [
+        [
+          {
+            "node": "POST /routines/briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "alfred-cron"
+    }
+  ]
+}
