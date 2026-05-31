@@ -27,8 +27,11 @@ dependencies = [
     "google-api-python-client>=2.150",
     "google-auth-oauthlib>=1.2",
     "google-auth-httplib2>=0.2",
-    # Scheduling
+    # Scheduling (legacy in-process cron — being retired in favor of n8n + HTTP)
     "apscheduler>=3.10",
+    # HTTP surface for n8n-driven routine triggers
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
     # Research curator (RSS + arXiv ingestion)
     "feedparser>=6.0",
     # iCloud (SMTP / IMAP / CalDAV) — app-password auth, no OAuth
