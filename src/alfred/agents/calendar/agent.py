@@ -16,7 +16,7 @@ import structlog
 import yaml
 from opentelemetry import trace
 
-from alfred.agents.base import AgentBase, AgentContext, AgentResult
+from scaffold.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.calendar.google_client import GoogleCalendarClient
 from alfred.agents.calendar.icloud_client import IcloudCalendarClient
 from alfred.agents.calendar.workflow import build_calendar_graph

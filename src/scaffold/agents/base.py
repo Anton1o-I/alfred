@@ -1,4 +1,10 @@
-"""Agent base class using Pydantic AI for typed tool-calling agents."""
+"""Agent base class — interface every concrete agent implements.
+
+Generic infrastructure: the AgentBase abstract class, AgentContext for
+request-scoped runtime data, and the AgentResult shape returned to the
+orchestrator. Concrete agents live in the agent system on top (e.g.
+alfred.agents.{calendar, curator, tasks}).
+"""
 
 from __future__ import annotations
 
@@ -33,7 +39,7 @@ class AgentContext:
 
 
 class AgentBase(ABC):
-    """Base class for all alfred agents.
+    """Base class for all agents.
 
     Concrete agents are typically thin wrappers around a `pydantic_ai.Agent`
     that adapt its result into AgentResult. The LangGraph orchestrator handles

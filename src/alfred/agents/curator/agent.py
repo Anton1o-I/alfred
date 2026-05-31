@@ -17,7 +17,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from alfred.agents.base import AgentBase, AgentContext, AgentResult
+from scaffold.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.curator.render import (
     render_comparison,
     render_digest,

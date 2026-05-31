@@ -9,7 +9,7 @@ from typing import Any
 
 import structlog
 
-from alfred.agents.registry import AgentRegistry
+from scaffold.agents.registry import AgentRegistry
 from alfred.orchestrator.orchestrator import Orchestrator
 from alfred.topics.store import TopicStore
 from scaffold.audit.logger import AuditLogger

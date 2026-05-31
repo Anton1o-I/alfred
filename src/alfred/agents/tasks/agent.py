@@ -7,7 +7,7 @@ from typing import Any
 import structlog
 from opentelemetry import trace
 
-from alfred.agents.base import AgentBase, AgentContext, AgentResult
+from scaffold.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.tasks.store import ChoreStore
 from alfred.agents.tasks.workflow import build_tasks_graph
 from scaffold.core.models import TokenUsage

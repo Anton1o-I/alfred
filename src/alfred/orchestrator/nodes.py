@@ -7,8 +7,8 @@ from typing import Any
 
 import structlog
 
-from alfred.agents.base import AgentContext
-from alfred.agents.registry import AgentRegistry
+from scaffold.agents.base import AgentContext
+from scaffold.agents.registry import AgentRegistry
 from alfred.orchestrator.state import OrchestratorState
 from scaffold.audit.logger import AuditLogger
 from scaffold.budget.policies import BudgetPolicy

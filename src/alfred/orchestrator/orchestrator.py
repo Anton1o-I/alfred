@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import structlog
 
-from alfred.agents.registry import AgentRegistry
+from scaffold.agents.registry import AgentRegistry
 from alfred.orchestrator.graph import build_orchestrator_graph
 from alfred.orchestrator.state import OrchestratorState
 from scaffold.audit.logger import AuditLogger

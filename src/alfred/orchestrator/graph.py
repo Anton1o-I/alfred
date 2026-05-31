@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, StateGraph
 
-from alfred.agents.registry import AgentRegistry
+from scaffold.agents.registry import AgentRegistry
 from alfred.orchestrator.nodes import (
     create_agent_executor,
     create_budget_checker,
