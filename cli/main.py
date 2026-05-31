@@ -49,7 +49,12 @@ def scheduler() -> None:
 
 @main.command()
 @click.option("--host", default="127.0.0.1", help="Address to bind. 0.0.0.0 to expose on LAN.")
-@click.option("--port", default=8080, type=int, help="Port to listen on.")
+@click.option(
+    "--port",
+    default=8765,
+    type=int,
+    help="Port to listen on. Default 8765 — avoids common collisions (Traefik :8080, etc).",
+)
 def serve(host: str, port: int) -> None:
     """Run the HTTP routine trigger server (long-lived). n8n posts here on cron."""
     asyncio.run(_run_serve(host, port))
