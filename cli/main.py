@@ -225,7 +225,7 @@ def google_auth(no_browser: bool) -> None:
     """Run the Google OAuth consent flow. Grants Gmail + Calendar scopes in one consent."""
     from pathlib import Path
 
-    from alfred.integrations.google_auth import DEFAULT_SCOPES, run_consent_flow
+    from scaffold.integrations.google_auth import DEFAULT_SCOPES, run_consent_flow
 
     config_dir = Path(__file__).resolve().parent.parent / "config"
 

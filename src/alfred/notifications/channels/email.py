@@ -13,7 +13,7 @@ import structlog
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from alfred.integrations.google_auth import (
+from scaffold.integrations.google_auth import (
     GMAIL_SEND_SCOPE,
     load_credentials,
 )

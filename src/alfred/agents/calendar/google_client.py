@@ -9,7 +9,7 @@ from typing import Any
 import structlog
 from googleapiclient.discovery import build
 
-from alfred.integrations.google_auth import load_credentials
+from scaffold.integrations.google_auth import load_credentials
 
 log = structlog.get_logger()
 
