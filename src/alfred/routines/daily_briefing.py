@@ -421,7 +421,7 @@ async def _send_shame_email(
         body=plain_final,
         subject=subject,
         html_body=html_final,
+        from_name=persona_name,
         agent_name="calendar",
         force_user_ids=force_user_ids,
-        persona_override=Persona.TASKS_SHAME,
     )

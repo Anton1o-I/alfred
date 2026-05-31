@@ -191,14 +191,20 @@ def test_resolve_persona_falls_back_to_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_to_family_uses_persona_override(monkeypatch, tmp_path) -> None:
-    """`persona_override` swaps the From-name on the outbound metadata."""
+async def test_send_to_family_passes_from_name_through(monkeypatch, tmp_path) -> None:
+    """`from_name` flows through to the channel as outbound metadata.
+
+    Personas are now resolved by the caller (e.g. `_send_shame_email`) and
+    handed in as `from_name`; the service itself no longer reads
+    `NotificationConfig.personas` or accepts a `persona_override`. This
+    test confirms the slim service still passes the resolved name through.
+    """
+    from alfred.notifications.service import NotificationService
+    from scaffold.audit.logger import AuditLogger
     from scaffold.core.config import (
         NotificationConfig,
         RecipientConfig,
     )
-    from alfred.notifications.service import NotificationService
-    from scaffold.audit.logger import AuditLogger
     from scaffold.core.constants import NotificationChannel
     from scaffold.storage.database import Database
 
@@ -215,12 +221,6 @@ async def test_send_to_family_uses_persona_override(monkeypatch, tmp_path) -> No
                 email="test@example.com",
             )
         ],
-        personas={
-            "tasks-shame": {
-                "display_name": "Alfred · Disappointed",
-                "tagline": "overdue chores note",
-            }
-        },
     )
 
     sent: list[Any] = []
@@ -237,12 +237,13 @@ async def test_send_to_family_uses_persona_override(monkeypatch, tmp_path) -> No
         audit_logger=audit,
         db=db,
     )
+    # Caller (in production: `_send_shame_email`) resolves the persona and
+    # hands us the final display string.
     await svc.send_to_family(
         body="b",
         subject="s",
         html_body="<p>x</p>",
-        from_name="Alfred · Scheduler",  # baseline; should be overridden
-        persona_override=Persona.TASKS_SHAME,
+        from_name="Alfred · Disappointed",
     )
     await db.close()
 

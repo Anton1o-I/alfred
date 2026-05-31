@@ -6,10 +6,9 @@ from typing import Any
 
 import structlog
 
-from scaffold.core.config import NotificationConfig, RecipientConfig
-from alfred.core.persona import Persona, resolve_persona
 from alfred.notifications.models import Notification, NotificationResult
 from scaffold.audit.logger import AuditLogger
+from scaffold.core.config import NotificationConfig, RecipientConfig
 from scaffold.core.constants import AuditEventType
 from scaffold.storage.database import Database
 
@@ -85,7 +84,6 @@ class NotificationService:
         from_name: str | None = None,
         agent_name: str | None = None,
         force_user_ids: list[str] | None = None,
-        persona_override: Persona | None = None,
     ) -> list[NotificationResult]:
         """Send a notification to all family members via their preferred channel.
 
@@ -98,17 +96,10 @@ class NotificationService:
         Used by the tasks-shame routing to CC a spouse who isn't otherwise
         subscribed to the daily briefing.
 
-        `persona_override` swaps the From-name with the persona's display
-        name (resolved from `NotificationConfig.personas`). Passed
-        explicitly via the `Persona` enum so call sites can't drift on
-        string spelling. When set, it takes precedence over `from_name`.
+        `from_name` overrides the channel's default From-name. Callers that
+        want a persona (e.g. "Alfred · Disappointed" for the shame email)
+        resolve the persona themselves and pass the name through.
         """
-        if persona_override is not None:
-            override_name, _override_tagline = resolve_persona(
-                persona_override, self._config.personas
-            )
-            if override_name:
-                from_name = override_name
         metadata = {"from_name": from_name} if from_name else {}
         forced = set(force_user_ids or [])
         results = []
