@@ -44,7 +44,7 @@ class TriggerBody(BaseModel):
     mode: str | None = None
 
 
-def create_routine_app(app: "AppProtocol", api_token: str) -> FastAPI:
+def create_routine_app(app: AppProtocol, api_token: str) -> FastAPI:
     """Build the FastAPI app bound to a particular wired application.
 
     Pass the already-constructed Alfred (or other agent system) App; the
@@ -126,7 +126,7 @@ def create_routine_app(app: "AppProtocol", api_token: str) -> FastAPI:
 
 
 async def _run_routine_safely(
-    app: "AppProtocol", name: str, mode: str | None
+    app: AppProtocol, name: str, mode: str | None
 ) -> None:
     """Run a routine and swallow exceptions — the HTTP response is long gone."""
     try:

@@ -13,7 +13,8 @@ trigger body. The registry supports both shapes.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -71,7 +72,7 @@ class RoutineRegistry:
 
     async def dispatch(
         self,
-        app: "AppProtocol",
+        app: AppProtocol,
         name: str,
         mode: str | None = None,
     ) -> dict | None:

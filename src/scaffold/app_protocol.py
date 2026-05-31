@@ -22,6 +22,6 @@ if TYPE_CHECKING:
 class AppProtocol(Protocol):
     """Minimum app surface scaffold dispatchers and triggers use."""
 
-    settings: "Settings"
-    agent_registry: "AgentRegistry"
-    routine_registry: "RoutineRegistry"
+    settings: Settings
+    agent_registry: AgentRegistry
+    routine_registry: RoutineRegistry

@@ -43,8 +43,16 @@ def budget() -> None:
 
 @main.command()
 def scheduler() -> None:
-    """Run the scheduler in foreground (long-lived). Honors enabled tasks in settings.yaml."""
+    """Run the legacy in-process scheduler (long-lived). Being retired in favor of n8n + `alfred serve`."""
     asyncio.run(_run_scheduler())
+
+
+@main.command()
+@click.option("--host", default="127.0.0.1", help="Address to bind. 0.0.0.0 to expose on LAN.")
+@click.option("--port", default=8080, type=int, help="Port to listen on.")
+def serve(host: str, port: int) -> None:
+    """Run the HTTP routine trigger server (long-lived). n8n posts here on cron."""
+    asyncio.run(_run_serve(host, port))
 
 
 @main.command(name="run-routine")
@@ -356,6 +364,40 @@ async def _run_scheduler() -> None:
     app = await _get_app()
     try:
         await run_scheduler(app)
+    finally:
+        await app.shutdown()
+
+
+async def _run_serve(host: str, port: int) -> None:
+    import os
+
+    import uvicorn
+
+    from scaffold.http.server import create_routine_app
+
+    api_token = os.environ.get("ALFRED_ROUTINE_API_KEY", "").strip()
+    if not api_token:
+        click.echo(
+            "ERROR: ALFRED_ROUTINE_API_KEY is not set. "
+            "Generate one with `openssl rand -hex 32` and add it to .env "
+            "before running `alfred serve`.",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    app = await _get_app()
+    fastapi_app = create_routine_app(app, api_token=api_token)
+    config = uvicorn.Config(
+        fastapi_app,
+        host=host,
+        port=port,
+        log_level="info",
+        # Single worker; routines are async and the app holds shared state.
+        workers=1,
+    )
+    server = uvicorn.Server(config)
+    try:
+        await server.serve()
     finally:
         await app.shutdown()
 

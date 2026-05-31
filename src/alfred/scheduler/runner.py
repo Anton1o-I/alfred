@@ -1,4 +1,10 @@
-"""APScheduler-based runner for cron-style scheduled routines."""
+"""APScheduler runner — legacy in-process cron, being retired in favor of n8n.
+
+Both paths now share the same RoutineRegistry dispatch, so behavior is
+identical whether the trigger comes from APScheduler or an n8n HTTP
+POST. Once n8n has been running cleanly for a cutover window, this
+module and `alfred-scheduler.service` get deleted.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +15,6 @@ from typing import TYPE_CHECKING
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from opentelemetry import trace
 
 from scaffold.core.constants import RequestSource
 from scaffold.core.models import AgentRequest
@@ -19,129 +24,43 @@ if TYPE_CHECKING:
     from scaffold.core.config import ScheduledTaskConfig
 
 log = structlog.get_logger()
-_tracer = trace.get_tracer("alfred.scheduler.runner")
-
-
-async def _email_curator_digest(
-    app: App,
-    digest_path: str,
-    html_body: str | None,
-    request_id: str,
-) -> None:
-    """Send the curator's digest to all family recipients (multipart text + html)."""
-    from datetime import UTC, datetime
-    from pathlib import Path
-
-    from alfred.signature import (
-        append_to_body,
-        append_to_html,
-        render_signature,
-    )
-
-    with _tracer.start_as_current_span("curator.email") as span:
-        span.set_attribute("alfred.request_id", request_id)
-        span.set_attribute("alfred.curator.digest_path", digest_path)
-        span.set_attribute("alfred.curator.html_present", bool(html_body))
-
-        body = Path(digest_path).read_text()
-        subject = f"Alfred Research Digest — {datetime.now(UTC).strftime('%Y-%m-%d')}"
-        cfg = app.settings.notifications
-        from_name = cfg.email_from_names_by_agent.get("curator")
-        tagline = cfg.email_taglines_by_agent.get("curator", "")
-        sig_plain, sig_html = render_signature(from_name or "", tagline)
-        body = append_to_body(body, sig_plain)
-        html_body_with_sig = append_to_html(html_body, sig_html) if html_body else None
-
-        results = await app.notification_service.send_to_family(
-            body=body,
-            subject=subject,
-            html_body=html_body_with_sig,
-            request_id=request_id,
-            from_name=from_name,
-            agent_name="curator",
-        )
-        successes = sum(1 for r in results if r.success)
-        failures = sum(1 for r in results if not r.success)
-        span.set_attribute("alfred.curator.recipients", len(results))
-        span.set_attribute("alfred.curator.delivered", successes)
-        span.set_attribute("alfred.curator.failed", failures)
-        for r in results:
-            if not r.success:
-                log.warning(
-                    "curator_email_failed", channel=r.channel, error=r.error
-                )
 
 
 async def run_routine(
     app: App,
     task: ScheduledTaskConfig,
-    compare: bool = False,
-    max_items: int | None = None,
+    compare: bool = False,  # noqa: ARG001 — kept for CLI compat; ignored
+    max_items: int | None = None,  # noqa: ARG001 — kept for CLI compat; ignored
 ) -> None:
-    """Execute a single scheduled routine through the orchestrator (or direct, for compare)."""
-    log.info("routine_start", task=task.name, agent=task.agent_name, compare=compare)
+    """Execute a scheduled task by name.
 
-    # Inbox poller: fetch unread messages, dispatch to orchestrator, reply.
-    if task.agent_name == "inbox":
-        if app.inbox_poller is None:
-            log.warning("inbox_poller_not_configured", task=task.name)
-            return
-        counts = await app.inbox_poller.process_once(app)
-        log.info("routine_finish", task=task.name, status="success", **counts)
-        return
+    For tasks whose agent_name is registered as a routine, dispatch via
+    the RoutineRegistry. For everything else (un-registered agent names),
+    fall back to the orchestrator path used by CLI/iMessage requests.
+    """
+    log.info("routine_start", task=task.name, agent=task.agent_name)
+    registry = app.routine_registry
 
-    # Calendar briefings: daily next-day reminder + Sunday week preview.
-    # `task.message` selects the mode ("daily" | "weekly").
-    if task.agent_name == "briefing":
-        from alfred.routines.daily_briefing import run_daily_briefing
-        from alfred.routines.morning_briefing import run_morning_briefing
-        from alfred.routines.weekly_preview import run_weekly_preview
-
-        mode = (task.message or "").strip().lower()
-        if mode == "daily":
-            result = await run_daily_briefing(app)
-        elif mode == "morning":
-            result = await run_morning_briefing(app)
-        elif mode == "weekly":
-            result = await run_weekly_preview(app)
-        else:
-            log.warning("briefing_unknown_mode", task=task.name, mode=mode)
-            return
-        log.info("routine_finish", task=task.name, status="success", **result)
-        return
-
-    # Curator goes direct (not through orchestrator) so we can email the
-    # actual digest body with a proper subject. Non-compare runs also email;
-    # compare runs just write the A/B file (review-only, no email).
-    if task.agent_name == "curator":
-        from alfred.agents.curator import CuratorAgent
-
-        agent = app.agent_registry.get("curator")
-        if not isinstance(agent, CuratorAgent):
-            log.error("curator_not_registered")
-            return
-        # Parent span so the digest LLM calls + the email step land in one
-        # Phoenix trace tree instead of as N siblings.
-        with _tracer.start_as_current_span("routine.curator") as routine_span:
-            routine_span.set_attribute("alfred.task", task.name)
-            routine_span.set_attribute("alfred.compare", compare)
-            result = await agent.generate_digest(
-                model_name="cloud-default",
-                request_id=f"{task.name}-direct",
-                compare_with="local-default" if compare else None,
-                max_candidates=max_items,
+    if task.agent_name in registry.list_names():
+        mode = (task.message or "").strip().lower() or None
+        try:
+            result = await registry.dispatch(app, task.agent_name, mode)
+        except Exception as e:  # noqa: BLE001
+            log.exception(
+                "routine_failed", task=task.name, agent=task.agent_name, error=str(e)
             )
-            path = result.data.get("path")
-            log.info("routine_finish", task=task.name, status="success", path=path)
-            if not compare and path:
-                await _email_curator_digest(
-                    app,
-                    path,
-                    html_body=result.data.get("html"),
-                    request_id=f"{task.name}-direct",
-                )
+            return
+        log.info(
+            "routine_finish",
+            task=task.name,
+            agent=task.agent_name,
+            status="success",
+            **(result or {}),
+        )
         return
 
+    # Generic fallback for agents not registered as a routine: send through
+    # the orchestrator the same way a CLI or iMessage request would.
     request = AgentRequest(
         user_message=task.message,
         source=RequestSource.SCHEDULER,
@@ -166,13 +85,11 @@ def build_scheduler(app: App) -> AsyncIOScheduler:
         log.warning("scheduler_no_enabled_tasks")
         return scheduler
 
-    # Pseudo-agents that route through dedicated paths in run_routine
-    # rather than the agent registry.
-    pseudo_agents = {"inbox", "briefing"}
+    known_routines = set(app.routine_registry.list_names())
 
     for task in enabled:
         if (
-            task.agent_name not in pseudo_agents
+            task.agent_name not in known_routines
             and app.agent_registry.get(task.agent_name) is None
         ):
             log.warning(
@@ -217,12 +134,15 @@ async def run_scheduler(app: App) -> None:
 
 
 async def run_routine_by_name(
-    app: App, name: str, compare: bool = False, max_items: int | None = None
+    app: App,
+    name: str,
+    compare: bool = False,  # noqa: ARG001 — kept for CLI compat
+    max_items: int | None = None,  # noqa: ARG001 — kept for CLI compat
 ) -> int:
-    """Fire a single named routine once. Returns 0 on success, 1 on error."""
+    """Fire a single scheduled task once by name. Returns 0 on success, 1 on error."""
     for task in app.settings.scheduled_tasks:
         if task.name == name:
-            await run_routine(app, task, compare=compare, max_items=max_items)
+            await run_routine(app, task)
             return 0
     log.error("routine_not_found", name=name)
     return 1

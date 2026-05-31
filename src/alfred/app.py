@@ -19,6 +19,7 @@ from scaffold.notifications.channels.imessage import BlueBubblesClient
 from scaffold.notifications.service import NotificationService
 from scaffold.orchestrator.orchestrator import Orchestrator
 from scaffold.routing.clients import LiteLLMClient
+from scaffold.scheduler.registry import RoutineRegistry
 from scaffold.storage.database import Database
 from scaffold.tools.registry import ToolRegistry
 
@@ -38,6 +39,7 @@ class App:
     notification_service: NotificationService
     agent_registry: AgentRegistry
     tool_registry: ToolRegistry
+    routine_registry: RoutineRegistry
     litellm_client: LiteLLMClient
     inbox_poller: Any = None  # InboxPoller | None — typed loosely to keep import chain quiet
 
@@ -145,7 +147,15 @@ async def create_app(config_dir: Path = Path("config")) -> App:
         else:
             log.warning("inbox_poller_disabled_missing_env")
 
-    log.info("app_initialized", agents=agent_registry.list_names())
+    # 10. Routine registry — populate with Alfred's scheduled routines so
+    # the HTTP trigger surface (or any other caller) can dispatch by name.
+    routine_registry = _build_routine_registry()
+
+    log.info(
+        "app_initialized",
+        agents=agent_registry.list_names(),
+        routines=routine_registry.list_names(),
+    )
 
     return App(
         settings=settings,
@@ -157,9 +167,36 @@ async def create_app(config_dir: Path = Path("config")) -> App:
         notification_service=notification_service,
         agent_registry=agent_registry,
         tool_registry=tool_registry,
+        routine_registry=routine_registry,
         litellm_client=litellm_client,
         inbox_poller=inbox_poller,
     )
+
+
+def _build_routine_registry() -> RoutineRegistry:
+    """Register Alfred's scheduled-task callables by name.
+
+    Names mirror the legacy `scheduled_tasks` agent_name values so the
+    n8n migration is a name-for-name swap.
+    """
+    from alfred.agents.curator.routine import run_curator_routine
+    from alfred.inbox.routine import run_inbox_poll
+    from alfred.routines.daily_briefing import run_daily_briefing
+    from alfred.routines.morning_briefing import run_morning_briefing
+    from alfred.routines.weekly_preview import run_weekly_preview
+
+    registry = RoutineRegistry()
+    registry.register("inbox", run_inbox_poll)
+    registry.register("curator", run_curator_routine)
+    registry.register_modes(
+        "briefing",
+        {
+            "daily": run_daily_briefing,
+            "morning": run_morning_briefing,
+            "weekly": run_weekly_preview,
+        },
+    )
+    return registry
 
 
 def _build_email_channel(settings: Settings, config_dir: Path) -> Any:
