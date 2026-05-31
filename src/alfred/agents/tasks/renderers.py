@@ -16,8 +16,9 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-# Sentinel tier value for chores that have not yet crossed their personal
-# shame_after_days threshold. Used by `shame_tier` and `_should_split_for_shame`.
+# Sentinel tier value for chores that are not eligible for a shame tier
+# (either not overdue yet, or overdue_days falls below the lowest tier's
+# `min_days`). Used by `shame_tier` and `_should_split_for_shame`.
 TIER_NONE: int = 0
 
 
@@ -87,19 +88,19 @@ class ShameTierTable:
 def shame_tier(
     overdue_days: int,
     *,
-    shame_after_days: int,
     table: ShameTierTable | None,
 ) -> int:
     """Return the shame tier (1..N) for a chore, or `TIER_NONE`.
 
-    A chore qualifies for tiering only once it has crossed its own
-    `shame_after_days` threshold. The tier itself is selected purely
-    from `overdue_days` via the configured `ShameTierTable`. Returns
-    `TIER_NONE` if no table is configured or no tier range matches.
+    A chore is eligible the moment it is past its computed `next_due`
+    (`overdue_days >= 1`). The tier itself is selected purely from
+    `overdue_days` via the configured `ShameTierTable`. Returns
+    `TIER_NONE` if no table is configured, the chore isn't overdue,
+    or no tier range matches.
     """
     if table is None:
         return TIER_NONE
-    if overdue_days < shame_after_days:
+    if overdue_days < 1:
         return TIER_NONE
     return table.tier_for(overdue_days)
 
@@ -119,11 +120,7 @@ def _should_split_for_shame(
     for s in statuses:
         if s.chore.assignee == "household":
             continue
-        tier = shame_tier(
-            s.overdue_days,
-            shame_after_days=s.chore.shame_after_days,
-            table=table,
-        )
+        tier = shame_tier(s.overdue_days, table=table)
         if tier >= 2:
             return True
     return False
@@ -159,7 +156,7 @@ def categorize_statuses(statuses: list[Any]) -> dict[str, list[Any]]:
 
 
 def shame_assignees(statuses: list[Any]) -> set[str]:
-    """Return the set of assignees whose chores are past shame_after_days.
+    """Return the set of assignees whose chores are overdue (>= 1 day past due).
 
     'household' is intentionally excluded — shame only applies to chores
     explicitly assigned to a person.
@@ -167,8 +164,7 @@ def shame_assignees(statuses: list[Any]) -> set[str]:
     return {
         s.chore.assignee
         for s in statuses
-        if s.overdue_days >= s.chore.shame_after_days
-        and s.chore.assignee != "household"
+        if s.overdue_days >= 1 and s.chore.assignee != "household"
     }
 
 
@@ -195,11 +191,7 @@ def _bucket_overdue_by_tier(
         if s.chore.assignee == "household":
             tier = TIER_NONE
         else:
-            tier = shame_tier(
-                s.overdue_days,
-                shame_after_days=s.chore.shame_after_days,
-                table=table,
-            )
+            tier = shame_tier(s.overdue_days, table=table)
         out.setdefault(tier, []).append(s)
     return out
 
