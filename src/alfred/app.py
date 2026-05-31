@@ -19,8 +19,7 @@ from alfred.notifications.service import NotificationService
 from alfred.orchestrator.orchestrator import Orchestrator
 from alfred.routing.clients import LiteLLMClient
 from alfred.storage.database import Database
-from alfred.tools.access_control import ToolAccessControl
-from alfred.tools.registry import ToolRegistry
+from scaffold.tools.registry import ToolRegistry
 from alfred.topics.store import TopicStore
 
 log = structlog.get_logger()
@@ -80,7 +79,6 @@ async def create_app(config_dir: Path = Path("config")) -> App:
     budget_policy = BudgetPolicy(settings.budget, db)
     budget_tracker = BudgetTracker(db)
     tool_registry = ToolRegistry()
-    ToolAccessControl(settings.agents)  # validates allowlists at startup
     topic_store = TopicStore(db)
 
     # 5. LiteLLM client

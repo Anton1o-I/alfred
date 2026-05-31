@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from alfred.agents.calendar.google_client import GoogleCalendarClient
-from alfred.tools.base import Tool
+from scaffold.tools.base import Tool
 
 
 class CalendarReadTool(Tool):
