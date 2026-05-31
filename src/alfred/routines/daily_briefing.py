@@ -48,6 +48,8 @@ from alfred.routines._common import (
     _render_chores_for_prompt,
     _render_email,
     _send,
+    fetch_chore_data,
+    generate_chore_roasts,
 )
 
 if TYPE_CHECKING:
@@ -173,7 +175,7 @@ async def run_daily_briefing(app: App) -> dict:
     end = start + timedelta(days=1)
 
     events = _fetch_events_for_window(app, start, end)
-    chore_data = await _fetch_chore_data(app, now_local, tz)
+    chore_data = await fetch_chore_data(app, now_local, tz)
     log.info(
         "daily_briefing_fetch",
         events=len(events),
@@ -216,7 +218,7 @@ async def run_daily_briefing(app: App) -> dict:
 
     tier_table = ShameTierTable(app.settings.notifications.shame_tiers)
     split_for_shame: bool = bool(chore_data.get("split_for_shame"))
-    roast_lines = await _generate_chore_roasts(
+    roast_lines = await generate_chore_roasts(
         app, chore_data["categorized"]["overdue"], tier_table
     )
 
@@ -293,120 +295,6 @@ async def run_daily_briefing(app: App) -> dict:
             for k in ("overdue", "due_today", "due_tomorrow")
         ),
         "emailed": True,
-    }
-
-
-async def _generate_chore_roasts(
-    app: App,
-    overdue: list[Any],
-    tier_table: Any,
-) -> dict[str, str]:
-    """Build the specialist inputs and call the roaster for shame-tier chores.
-
-    Returns `{chore_id: roast}` for every chore the LLM successfully
-    roasted. Returns `{}` on any failure (the renderers fall back per
-    chore to the static `fallback_label`). Skipped entirely when no
-    overdue chore qualifies for a shame tier (tier ≥ 1).
-    """
-    from alfred.agents.tasks.renderers import shame_tier
-    from alfred.specialists.shame.specialist import (
-        ChoreRoastInput,
-        generate_roasts,
-    )
-
-    inputs: list[ChoreRoastInput] = []
-    for s in overdue:
-        if s.chore.assignee == "household":
-            # Household chores skip shame; static label is correct here.
-            continue
-        tier = shame_tier(
-            s.overdue_days,
-            shame_after_days=s.chore.shame_after_days,
-            table=tier_table,
-        )
-        if tier < 1:
-            continue
-        chore_id = getattr(s.chore, "id", None)
-        if not chore_id:
-            continue
-        inputs.append(
-            ChoreRoastInput(
-                chore_id=str(chore_id),
-                title=s.chore.title,
-                assignee=s.chore.assignee,
-                tier=tier,
-                days=s.overdue_days,
-            )
-        )
-    if not inputs:
-        return {}
-    try:
-        return await generate_roasts(inputs, app.litellm_client)
-    except Exception as e:  # noqa: BLE001
-        log.warning("shame_roast_generation_failed", error=str(e))
-        return {}
-
-
-async def _fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict:
-    """Pull chore statuses from the tasks agent's store (if registered).
-
-    Returns categorized status buckets + the list of user_ids that should be
-    force-CC'd because at least one of their chores is past `shame_after_days`.
-    Returns empty data when the tasks agent isn't enabled.
-    """
-    from alfred.agents.tasks.renderers import (
-        ShameTierTable,
-        _should_split_for_shame,
-        categorize_statuses,
-        shame_assignees,
-        shame_tier,
-    )
-
-    empty = {
-        "categorized": {"overdue": [], "due_today": [], "due_tomorrow": [], "later": []},
-        "shame_user_ids": [],
-        "statuses": [],
-        "split_for_shame": False,
-        "shame_overdue": [],
-        "non_shame_overdue": [],
-    }
-    tasks_agent = app.agent_registry.get("tasks")
-    if tasks_agent is None:
-        return empty
-    try:
-        statuses = await tasks_agent.store.status_for_all_active(now=now_local, tz=tz)
-    except Exception as e:  # noqa: BLE001
-        log.warning("daily_briefing_chores_fetch_failed", error=str(e))
-        return empty
-    categorized = categorize_statuses(statuses)
-    shame_ids = sorted(shame_assignees(statuses))
-
-    table = ShameTierTable(app.settings.notifications.shame_tiers)
-    split = _should_split_for_shame(statuses, table)
-    shame_overdue: list[Any] = []
-    non_shame_overdue: list[Any] = []
-    if split:
-        for s in categorized["overdue"]:
-            if s.chore.assignee == "household":
-                non_shame_overdue.append(s)
-                continue
-            tier = shame_tier(
-                s.overdue_days,
-                shame_after_days=s.chore.shame_after_days,
-                table=table,
-            )
-            if tier >= 2:
-                shame_overdue.append(s)
-            else:
-                non_shame_overdue.append(s)
-
-    return {
-        "categorized": categorized,
-        "shame_user_ids": shame_ids,
-        "statuses": statuses,
-        "split_for_shame": split,
-        "shame_overdue": shame_overdue,
-        "non_shame_overdue": non_shame_overdue,
     }
 
 

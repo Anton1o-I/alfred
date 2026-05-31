@@ -13,14 +13,19 @@ schemas locally.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal
+from zoneinfo import ZoneInfo
 
+import structlog
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 if TYPE_CHECKING:
     from alfred.app import App
+
+log = structlog.get_logger()
 
 
 _FONT_STACK = (
@@ -211,6 +216,182 @@ def _render_email(
     parts.append("</div></body></html>")
     html = "".join(parts)
     return plain, html
+
+
+async def generate_chore_roasts(
+    app: App,
+    overdue: list[Any],
+    tier_table: Any,
+) -> dict[str, str]:
+    """Build the specialist inputs and call the roaster for shame-tier chores.
+
+    Returns ``{chore_id: roast}`` for every chore the LLM successfully
+    roasted. Returns ``{}`` on any failure (the renderers fall back per
+    chore to the static ``fallback_label``). Skipped entirely when no
+    overdue chore qualifies for a shame tier (tier ≥ 1).
+    """
+    from alfred.agents.tasks.renderers import shame_tier
+    from alfred.specialists.shame.specialist import (
+        ChoreRoastInput,
+        generate_roasts,
+    )
+
+    inputs: list[ChoreRoastInput] = []
+    for s in overdue:
+        if s.chore.assignee == "household":
+            continue
+        tier = shame_tier(s.overdue_days, table=tier_table)
+        if tier < 1:
+            continue
+        chore_id = getattr(s.chore, "id", None)
+        if not chore_id:
+            continue
+        inputs.append(
+            ChoreRoastInput(
+                chore_id=str(chore_id),
+                title=s.chore.title,
+                assignee=s.chore.assignee,
+                tier=tier,
+                days=s.overdue_days,
+            )
+        )
+    if not inputs:
+        return {}
+    try:
+        return await generate_roasts(inputs, app.litellm_client)
+    except Exception as e:  # noqa: BLE001
+        log.warning("shame_roast_generation_failed", error=str(e))
+        return {}
+
+
+async def fetch_chore_data(app: App, now_local: datetime, tz: ZoneInfo) -> dict:
+    """Pull chore statuses from the tasks agent's store (if registered).
+
+    Returns categorized status buckets + the list of user_ids that should
+    be force-CC'd because at least one of their chores is overdue, plus
+    the tier-2+ split for the optional "Disappointed" envelope.
+    """
+    from alfred.agents.tasks.renderers import (
+        ShameTierTable,
+        _should_split_for_shame,
+        categorize_statuses,
+        shame_assignees,
+        shame_tier,
+    )
+
+    empty = {
+        "categorized": {"overdue": [], "due_today": [], "due_tomorrow": [], "later": []},
+        "shame_user_ids": [],
+        "statuses": [],
+        "split_for_shame": False,
+        "shame_overdue": [],
+        "non_shame_overdue": [],
+    }
+    tasks_agent = app.agent_registry.get("tasks")
+    if tasks_agent is None:
+        return empty
+    try:
+        statuses = await tasks_agent.store.status_for_all_active(now=now_local, tz=tz)
+    except Exception as e:  # noqa: BLE001
+        log.warning("briefing_chores_fetch_failed", error=str(e))
+        return empty
+    categorized = categorize_statuses(statuses)
+    shame_ids = sorted(shame_assignees(statuses))
+
+    table = ShameTierTable(app.settings.notifications.shame_tiers)
+    split = _should_split_for_shame(statuses, table)
+    shame_overdue: list[Any] = []
+    non_shame_overdue: list[Any] = []
+    if split:
+        for s in categorized["overdue"]:
+            if s.chore.assignee == "household":
+                non_shame_overdue.append(s)
+                continue
+            tier = shame_tier(s.overdue_days, table=table)
+            if tier >= 2:
+                shame_overdue.append(s)
+            else:
+                non_shame_overdue.append(s)
+
+    return {
+        "categorized": categorized,
+        "shame_user_ids": shame_ids,
+        "statuses": statuses,
+        "split_for_shame": split,
+        "shame_overdue": shame_overdue,
+        "non_shame_overdue": non_shame_overdue,
+    }
+
+
+def render_week_ahead_bullets_plain(
+    by_day: dict[str, list[dict]], tz: ZoneInfo
+) -> str:
+    """One-line-per-day terse glance of the next 7 days (plain text).
+
+    Each line: ``Mon Jun 2 — 3 events, first 9:00 am``. Empty days show
+    ``— clear``. Used by the morning briefing's hybrid week-ahead block.
+    """
+    from datetime import date as date_cls
+
+    lines: list[str] = []
+    for day_iso in sorted(by_day.keys()):
+        evs = by_day[day_iso]
+        d = date_cls.fromisoformat(day_iso)
+        label = d.strftime("%a %b %-d")
+        if not evs:
+            lines.append(f"  {label} — clear")
+            continue
+        evs_sorted = sorted(evs, key=lambda e: e["start_iso"])
+        first = datetime.fromisoformat(evs_sorted[0]["start_iso"]).astimezone(tz)
+        first_str = first.strftime("%-I:%M %p").lower()
+        n = len(evs)
+        word = "event" if n == 1 else "events"
+        lines.append(f"  {label} — {n} {word}, first {first_str}")
+    return "\n".join(lines) if lines else "  (no events on the calendar)"
+
+
+def render_week_ahead_bullets_html(
+    by_day: dict[str, list[dict]], tz: ZoneInfo
+) -> str:
+    """HTML version of the week-ahead glance — inline-styled list rows."""
+    from datetime import date as date_cls
+    from html import escape
+
+    row_style = (
+        "padding: 6px 0; border-bottom: 1px solid #f0f0f3; "
+        "font-size: 14px; line-height: 1.4;"
+    )
+    day_style = (
+        "display: inline-block; min-width: 110px; color: #6e6e73; "
+        "font-variant-numeric: tabular-nums;"
+    )
+    detail_style = "color: #1d1d1f;"
+    clear_style = "color: #86868b; font-style: italic;"
+
+    parts: list[str] = []
+    for day_iso in sorted(by_day.keys()):
+        evs = by_day[day_iso]
+        d = date_cls.fromisoformat(day_iso)
+        label = d.strftime("%a %b %-d")
+        if not evs:
+            parts.append(
+                f'<div style="{row_style}">'
+                f'<span style="{day_style}">{escape(label)}</span>'
+                f'<span style="{clear_style}">clear</span></div>'
+            )
+            continue
+        evs_sorted = sorted(evs, key=lambda e: e["start_iso"])
+        first = datetime.fromisoformat(evs_sorted[0]["start_iso"]).astimezone(tz)
+        first_str = first.strftime("%-I:%M %p").lower()
+        n = len(evs)
+        word = "event" if n == 1 else "events"
+        detail = f"{n} {word}, first {first_str}"
+        parts.append(
+            f'<div style="{row_style}">'
+            f'<span style="{day_style}">{escape(label)}</span>'
+            f'<span style="{detail_style}">{escape(detail)}</span></div>'
+        )
+    return "".join(parts) or '<p style="color:#86868b;">(no events on the calendar)</p>'
 
 
 async def _send(

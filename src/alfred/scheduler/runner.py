@@ -82,11 +82,14 @@ async def run_routine(
     # `task.message` selects the mode ("daily" | "weekly").
     if task.agent_name == "briefing":
         from alfred.routines.daily_briefing import run_daily_briefing
+        from alfred.routines.morning_briefing import run_morning_briefing
         from alfred.routines.weekly_preview import run_weekly_preview
 
         mode = (task.message or "").strip().lower()
         if mode == "daily":
             result = await run_daily_briefing(app)
+        elif mode == "morning":
+            result = await run_morning_briefing(app)
         elif mode == "weekly":
             result = await run_weekly_preview(app)
         else:
