@@ -6,7 +6,7 @@ from typing import Any
 
 import structlog
 
-from alfred.core.config import NotificationConfig, RecipientConfig
+from scaffold.core.config import NotificationConfig, RecipientConfig
 from alfred.core.persona import Persona, resolve_persona
 from alfred.notifications.models import Notification, NotificationResult
 from scaffold.audit.logger import AuditLogger

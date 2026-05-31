@@ -10,7 +10,7 @@ from typing import Any
 
 import structlog
 
-from alfred.core.config import AgentConfig
+from scaffold.core.config import AgentConfig
 from scaffold.core.models import AgentRequest, LLMResponse
 from scaffold.routing.clients import LiteLLMClient
 

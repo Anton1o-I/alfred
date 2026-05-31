@@ -110,7 +110,7 @@ async def _run_simulation(
     # scheduler without contention.
     import os
 
-    from alfred.core.config import init_settings
+    from scaffold.core.config import init_settings
     from alfred.observability import init_observability
     from scaffold.routing.clients import LiteLLMClient
 
@@ -250,7 +250,7 @@ def google_auth(no_browser: bool) -> None:
 @main.command()
 def list_calendars() -> None:
     """List accessible calendars on the configured provider (iCloud or Google)."""
-    from alfred.core.config import load_settings
+    from scaffold.core.config import load_settings
 
     settings = load_settings()
     config_dir = Path(__file__).resolve().parent.parent / "config"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import structlog
 
 from alfred.agents.base import AgentBase
-from alfred.core.config import AgentConfig
+from scaffold.core.config import AgentConfig
 
 log = structlog.get_logger()
 

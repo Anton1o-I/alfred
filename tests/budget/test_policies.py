@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from alfred.core.config import BudgetConfig
+from scaffold.core.config import BudgetConfig
 from scaffold.budget.policies import BudgetPolicy
 from scaffold.budget.tracker import BudgetTracker
 from scaffold.core.models import TokenUsage

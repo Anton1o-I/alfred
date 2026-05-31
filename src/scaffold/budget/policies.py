@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from alfred.core.config import BudgetConfig
+from scaffold.core.config import BudgetConfig
 from scaffold.storage.database import Database
 
 
