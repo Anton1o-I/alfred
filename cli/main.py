@@ -110,8 +110,8 @@ async def _run_simulation(
     # scheduler without contention.
     import os
 
-    from scaffold.core.config import init_settings
     from alfred.observability import init_observability
+    from scaffold.core.config import init_settings
     from scaffold.routing.clients import LiteLLMClient
 
     settings = init_settings(Path("config"))

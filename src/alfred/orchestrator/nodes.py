@@ -9,12 +9,12 @@ import structlog
 
 from alfred.agents.base import AgentContext
 from alfred.agents.registry import AgentRegistry
-from alfred.notifications.service import NotificationService
 from alfred.orchestrator.state import OrchestratorState
 from scaffold.audit.logger import AuditLogger
 from scaffold.budget.policies import BudgetPolicy
 from scaffold.budget.tracker import BudgetTracker
 from scaffold.core.constants import AuditEventType
+from scaffold.notifications.service import NotificationService
 from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()

@@ -6,10 +6,10 @@ from typing import Any
 
 import structlog
 
-from alfred.notifications.models import Notification, NotificationResult
 from scaffold.audit.logger import AuditLogger
 from scaffold.core.config import NotificationConfig, RecipientConfig
 from scaffold.core.constants import AuditEventType
+from scaffold.notifications.models import Notification, NotificationResult
 from scaffold.storage.database import Database
 
 log = structlog.get_logger()

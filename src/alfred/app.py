@@ -10,14 +10,14 @@ from typing import Any
 import structlog
 
 from alfred.agents.registry import AgentRegistry
-from scaffold.core.config import Settings, init_settings
-from alfred.notifications.channels.imessage import BlueBubblesClient
-from alfred.notifications.service import NotificationService
 from alfred.orchestrator.orchestrator import Orchestrator
 from alfred.topics.store import TopicStore
 from scaffold.audit.logger import AuditLogger
 from scaffold.budget.policies import BudgetPolicy
 from scaffold.budget.tracker import BudgetTracker
+from scaffold.core.config import Settings, init_settings
+from scaffold.notifications.channels.imessage import BlueBubblesClient
+from scaffold.notifications.service import NotificationService
 from scaffold.routing.clients import LiteLLMClient
 from scaffold.storage.database import Database
 from scaffold.tools.registry import ToolRegistry
@@ -167,7 +167,7 @@ def _build_email_channel(settings: Settings, config_dir: Path) -> Any:
     provider = cfg.email_provider.lower()
 
     if provider == "icloud":
-        from alfred.notifications.channels.icloud_email import IcloudEmailClient
+        from scaffold.notifications.channels.icloud_email import IcloudEmailClient
 
         addr = os.environ.get(cfg.icloud_email_env, "").strip()
         pw = os.environ.get(cfg.icloud_app_password_env, "").strip()
@@ -195,7 +195,7 @@ def _build_email_channel(settings: Settings, config_dir: Path) -> Any:
         )
 
     if provider == "gmail":
-        from alfred.notifications.channels.email import EmailClient
+        from scaffold.notifications.channels.email import EmailClient
 
         return EmailClient(
             credentials_path=config_dir / "google_credentials.json",

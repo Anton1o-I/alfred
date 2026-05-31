@@ -17,7 +17,7 @@ from scaffold.integrations.google_auth import (
     GMAIL_SEND_SCOPE,
     load_credentials,
 )
-from alfred.notifications.models import Notification, NotificationResult
+from scaffold.notifications.models import Notification, NotificationResult
 
 log = structlog.get_logger()
 

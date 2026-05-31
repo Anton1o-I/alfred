@@ -199,13 +199,13 @@ async def test_send_to_family_passes_from_name_through(monkeypatch, tmp_path) ->
     `NotificationConfig.personas` or accepts a `persona_override`. This
     test confirms the slim service still passes the resolved name through.
     """
-    from alfred.notifications.service import NotificationService
     from scaffold.audit.logger import AuditLogger
     from scaffold.core.config import (
         NotificationConfig,
         RecipientConfig,
     )
     from scaffold.core.constants import NotificationChannel
+    from scaffold.notifications.service import NotificationService
     from scaffold.storage.database import Database
 
     db = Database(str(tmp_path / "t.db"))
@@ -228,7 +228,7 @@ async def test_send_to_family_passes_from_name_through(monkeypatch, tmp_path) ->
     class _StubChannel:
         async def send(self, notification):  # type: ignore[no-untyped-def]
             sent.append(notification)
-            from alfred.notifications.models import NotificationResult
+            from scaffold.notifications.models import NotificationResult
             return NotificationResult(success=True, channel="email")
 
     svc = NotificationService(

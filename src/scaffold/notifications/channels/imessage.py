@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import structlog
 
-from alfred.notifications.models import Notification, NotificationResult
+from scaffold.notifications.models import Notification, NotificationResult
 
 log = structlog.get_logger()
 

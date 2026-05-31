@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from alfred.specialists.shame.prompts import ROAST_SYSTEM, build_roast_prompt
 
 log = structlog.get_logger()
-_tracer = trace.get_tracer("alfred.notifications.shame_roast")
+_tracer = trace.get_tracer("scaffold.notifications.shame_roast")
 
 
 # Hard cap applied AFTER the LLM responds — protects rendering from

@@ -16,7 +16,7 @@ from scaffold.core.models import AgentRequest
 
 if TYPE_CHECKING:
     from alfred.app import App
-    from alfred.core.config import ScheduledTaskConfig
+    from scaffold.core.config import ScheduledTaskConfig
 
 log = structlog.get_logger()
 _tracer = trace.get_tracer("alfred.scheduler.runner")
@@ -32,7 +32,7 @@ async def _email_curator_digest(
     from datetime import UTC, datetime
     from pathlib import Path
 
-    from alfred.notifications.signature import (
+    from alfred.signature import (
         append_to_body,
         append_to_html,
         render_signature,

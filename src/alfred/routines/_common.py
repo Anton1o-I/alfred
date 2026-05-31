@@ -401,7 +401,7 @@ async def _send(
     html: str,
     force_user_ids: list[str] | None = None,
 ) -> None:
-    from alfred.notifications.signature import append_to_body, append_to_html, render_signature
+    from alfred.signature import append_to_body, append_to_html, render_signature
 
     cfg = app.settings.notifications
     from_name = cfg.email_from_names_by_agent.get("calendar", cfg.email_from_name)

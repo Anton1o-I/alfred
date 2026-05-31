@@ -5,7 +5,6 @@ from __future__ import annotations
 from langgraph.graph import END, StateGraph
 
 from alfred.agents.registry import AgentRegistry
-from alfred.notifications.service import NotificationService
 from alfred.orchestrator.nodes import (
     create_agent_executor,
     create_budget_checker,
@@ -16,6 +15,7 @@ from alfred.orchestrator.state import OrchestratorState
 from scaffold.audit.logger import AuditLogger
 from scaffold.budget.policies import BudgetPolicy
 from scaffold.budget.tracker import BudgetTracker
+from scaffold.notifications.service import NotificationService
 from scaffold.routing.clients import LiteLLMClient
 
 

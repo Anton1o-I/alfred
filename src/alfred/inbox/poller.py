@@ -16,14 +16,14 @@ from typing import TYPE_CHECKING
 import structlog
 from imap_tools import AND, MailBox
 
-from alfred.core.constants import RequestSource
-from alfred.core.models import AgentRequest
 from alfred.inbox.email_parse import format_thread_for_agent, parse_thread
-from alfred.notifications.signature import (
+from alfred.signature import (
     append_to_body,
     append_to_html,
     render_signature,
 )
+from scaffold.core.constants import RequestSource
+from scaffold.core.models import AgentRequest
 
 if TYPE_CHECKING:
     from alfred.app import App
@@ -33,10 +33,44 @@ log = structlog.get_logger()
 IMAP_HOST = "imap.mail.me.com"
 IMAP_PORT = 993
 
-# Folders to scan. Junk is included because iCloud's spam filter often misroutes
-# legitimate messages from authorized senders, especially for newer accounts.
-# Our allowlist is the real security boundary.
-POLLED_FOLDERS = ("INBOX", "Junk")
+# Folders to scan. Junk is deliberately excluded: From: spoofs that survive
+# inbound filters often land there, and our sender allowlist alone isn't
+# sufficient defence without DKIM. If a legitimate sender gets misrouted,
+# the operator should mark them not-junk on the iCloud side.
+POLLED_FOLDERS = ("INBOX",)
+
+# Matches `dkim=pass` (with optional surrounding whitespace) and
+# `header.d=<domain>` inside an Authentication-Results entry.
+_DKIM_PASS_RE = re.compile(r"dkim\s*=\s*pass\b", re.IGNORECASE)
+_HEADER_D_RE = re.compile(r"header\.d\s*=\s*([A-Za-z0-9.\-_]+)", re.IGNORECASE)
+
+
+def dkim_passes_for_domain(
+    auth_results_headers: list[str], sender_domain: str
+) -> bool:
+    """Return True iff any Authentication-Results entry shows `dkim=pass`
+    with `header.d=` matching the sender domain (exact or parent-domain).
+
+    Fails closed: missing/empty headers, mismatched domains, or a `dkim=fail`
+    record all return False.
+    """
+    sender_domain = sender_domain.lower().strip().lstrip(".")
+    if not sender_domain:
+        return False
+    for raw in auth_results_headers:
+        if not raw:
+            continue
+        # Each result inside Authentication-Results is a `;`-separated segment.
+        for chunk in raw.split(";"):
+            if not _DKIM_PASS_RE.search(chunk):
+                continue
+            m = _HEADER_D_RE.search(chunk)
+            if not m:
+                continue
+            d = m.group(1).lower().lstrip(".")
+            if d == sender_domain or sender_domain.endswith("." + d):
+                return True
+    return False
 
 
 @dataclass
@@ -56,6 +90,14 @@ def _header(headers: dict, key: str) -> str:
     if isinstance(val, tuple):
         return val[0] if val else ""
     return val or ""
+
+
+def _headers_all(headers: dict, key: str) -> list[str]:
+    """Return every value for a header (Authentication-Results can repeat)."""
+    val = headers.get(key, "")
+    if isinstance(val, tuple):
+        return [v for v in val if v]
+    return [val] if val else []
 
 
 class InboxPoller:
@@ -101,6 +143,25 @@ class InboxPoller:
                             "inbox_skip_unauthorized",
                             uid=msg.uid,
                             from_=msg.from_,
+                            folder=folder,
+                        )
+                        unauthorized_uids.setdefault(folder, []).append(msg.uid)
+                        continue
+                    # Sender header passed the allowlist; now verify DKIM so a
+                    # forged `From:` from an allowlisted address can't drive
+                    # the agent. iCloud writes Authentication-Results on
+                    # delivery, so absence == fail-closed.
+                    _, sender_addr = parseaddr(msg.from_)
+                    sender_domain = (
+                        sender_addr.rsplit("@", 1)[-1] if "@" in sender_addr else ""
+                    )
+                    auth_results = _headers_all(msg.headers, "authentication-results")
+                    if not dkim_passes_for_domain(auth_results, sender_domain):
+                        log.warning(
+                            "inbox_skip_dkim_fail",
+                            uid=msg.uid,
+                            from_=sender_addr,
+                            domain=sender_domain,
                             folder=folder,
                         )
                         unauthorized_uids.setdefault(folder, []).append(msg.uid)

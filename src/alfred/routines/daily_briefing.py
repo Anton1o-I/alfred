@@ -348,7 +348,7 @@ async def _send_shame_email(
         render_chores_plain,
     )
     from alfred.core.persona import Persona, resolve_persona
-    from alfred.notifications.signature import (
+    from alfred.signature import (
         append_to_body,
         append_to_html,
         render_signature,
