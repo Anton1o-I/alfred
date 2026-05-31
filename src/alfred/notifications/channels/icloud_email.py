@@ -3,10 +3,19 @@
 App-password auth against smtp.mail.me.com:587 (STARTTLS). No OAuth, no
 expiring refresh tokens. The "From" address must be a verified alias on
 the authenticated Apple ID.
+
+After each successful SMTP send we also APPEND a copy of the message to
+the iCloud "Sent Messages" mailbox over IMAPS — SMTP only transmits to
+the recipient and does not populate the sender's Sent folder. The IMAP
+APPEND is best-effort: a failure is logged but does not flip the send
+result, since the recipient has already been delivered to.
 """
 
 from __future__ import annotations
 
+import asyncio
+import imaplib
+import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, make_msgid
@@ -20,6 +29,11 @@ log = structlog.get_logger()
 
 SMTP_HOST = "smtp.mail.me.com"
 SMTP_PORT = 587
+IMAP_HOST = "imap.mail.me.com"
+IMAP_PORT = 993
+# iCloud's Sent mailbox is named "Sent Messages" — the same string Mail.app
+# and the iCloud web UI use. Don't change without checking your account.
+SENT_MAILBOX = "Sent Messages"
 
 
 class IcloudEmailClient:
@@ -74,6 +88,52 @@ class IcloudEmailClient:
                     msg[k] = v
         return msg
 
+    def _imap_append_sent(self, msg: MIMEText | MIMEMultipart) -> None:
+        """Blocking IMAP APPEND to iCloud's Sent Messages mailbox.
+
+        Runs in a thread (see `_save_to_sent`). Stdlib `imaplib` is
+        synchronous; the per-send overhead is ~200-400 ms and we don't
+        block the event loop because we wrap the call in `asyncio.to_thread`.
+
+        Two quirks worth knowing if you debug this:
+          - The message bytes MUST use CRLF line endings; `as_bytes` produces
+            LF by default and iCloud answers `BAD Parse Error` to LF input.
+          - The mailbox name `Sent Messages` contains a space; we pass it
+            inside double quotes so `imaplib` doesn't split on whitespace.
+        """
+        raw = msg.as_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as imap:
+            imap.login(self._username, self._password)
+            # `\Seen` so the message doesn't show as unread in Sent.
+            status, data = imap.append(
+                f'"{SENT_MAILBOX}"',
+                "(\\Seen)",
+                imaplib.Time2Internaldate(time.time()),
+                raw,
+            )
+            if status != "OK":
+                raise RuntimeError(f"IMAP APPEND status={status} data={data!r}")
+
+    async def _save_to_sent(self, msg: MIMEText | MIMEMultipart) -> None:
+        """Best-effort copy of `msg` into iCloud's Sent Messages mailbox.
+
+        Never raises — IMAP issues are logged but don't propagate, because
+        the SMTP send has already succeeded by the time we get here.
+        """
+        try:
+            await asyncio.to_thread(self._imap_append_sent, msg)
+            log.info(
+                "email_saved_to_sent",
+                message_id=msg.get("Message-Id", ""),
+                mailbox=SENT_MAILBOX,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "email_save_to_sent_failed",
+                error=str(e),
+                message_id=msg.get("Message-Id", ""),
+            )
+
     async def _deliver(
         self, msg: MIMEText | MIMEMultipart, recipient: str
     ) -> NotificationResult:
@@ -94,6 +154,7 @@ class IcloudEmailClient:
                 channel="icloud",
                 message_id=msg_id,
             )
+            await self._save_to_sent(msg)
             return NotificationResult(
                 success=True, channel="email", message_id=msg_id
             )
