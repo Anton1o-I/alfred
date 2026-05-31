@@ -1,0 +1,45 @@
+[Unit]
+Description=Alfred — HTTP routine trigger server (replaces alfred-scheduler under n8n)
+Documentation=https://github.com/Anton1o-I/alfred
+# Network must be up before we hit iCloud / LiteLLM / Phoenix.
+After=network-online.target
+Wants=network-online.target
+# Docker stack (LiteLLM, Ollama, Phoenix, n8n) is a soft dependency — Alfred
+# can still start if it's not up; routines that need those services will
+# fail until they're reachable.
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=ant
+Group=ant
+WorkingDirectory=/home/ant/dev/home-agent
+EnvironmentFile=/home/ant/dev/home-agent/.env
+# Bind to 0.0.0.0 so the n8n container can reach us via
+# host.docker.internal (resolved to the host-gateway address). The
+# server still requires X-Alfred-Token on every request, so binding
+# beyond loopback isn't an additional auth concern — but the firewall
+# should still restrict :8765 to the docker bridge / loopback only.
+ExecStart=/home/ant/.local/bin/uv run alfred serve --host 0.0.0.0 --port 8765
+
+# Restart on crash with a 10s backoff. Cap retries so a fundamentally broken
+# build doesn't pin the CPU restarting forever — 5 attempts in 60s.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Output goes to journald — view with `journalctl -u alfred-server -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alfred-server
+
+# Minor hardening — limit blast radius if Alfred gets compromised.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
