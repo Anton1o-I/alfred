@@ -30,8 +30,8 @@ from alfred.agents.curator.sources import (
 )
 from alfred.observability_helpers import llm_span, record_tokens
 from alfred.prompts import load_prompt
-from alfred.routing.clients import LiteLLMClient
 from scaffold.core.models import TokenUsage
+from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
 _tracer = trace.get_tracer("alfred.curator.agent")

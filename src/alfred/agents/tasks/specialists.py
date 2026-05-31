@@ -41,7 +41,7 @@ from alfred.agents.tasks.schemas import (
 )
 
 if TYPE_CHECKING:
-    from alfred.routing.clients import LiteLLMClient
+    from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
 

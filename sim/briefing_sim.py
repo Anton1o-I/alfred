@@ -44,7 +44,7 @@ from alfred.routines._common import (
     _render_email,
 )
 from alfred.routines.daily_briefing import _DAILY_PROMPT, DailyNarrative
-from alfred.routing.clients import LiteLLMClient
+from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
 

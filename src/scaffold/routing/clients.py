@@ -8,7 +8,7 @@ import httpx
 import structlog
 from openai import AsyncOpenAI
 
-from alfred.core.models import LLMResponse, TokenUsage, ToolCall
+from scaffold.core.models import LLMResponse, TokenUsage, ToolCall
 
 log = structlog.get_logger()
 
@@ -28,9 +28,12 @@ class LiteLLMClient:
         self.base_url = base_url or os.environ.get(
             "LITELLM_BASE_URL", "http://localhost:4000"
         )
-        self._api_key = api_key or os.environ.get(
-            "LITELLM_MASTER_KEY", "sk-alfred-dev"
-        )
+        self._api_key = api_key or os.environ.get("LITELLM_MASTER_KEY")
+        if not self._api_key:
+            raise RuntimeError(
+                "LITELLM_MASTER_KEY is not set. Generate one with "
+                "`openssl rand -hex 32` and add it to .env before starting the agent."
+            )
         self._client = AsyncOpenAI(
             base_url=f"{self.base_url}/v1",
             api_key=self._api_key,

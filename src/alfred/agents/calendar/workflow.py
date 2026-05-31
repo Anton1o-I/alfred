@@ -56,7 +56,7 @@ from alfred.agents.calendar.replies import build_reply_pair
 if TYPE_CHECKING:
     from alfred.agents.calendar.google_client import GoogleCalendarClient
     from alfred.agents.calendar.icloud_client import IcloudCalendarClient
-    from alfred.routing.clients import LiteLLMClient
+    from scaffold.routing.clients import LiteLLMClient
 
     CalendarClient = IcloudCalendarClient | GoogleCalendarClient
 

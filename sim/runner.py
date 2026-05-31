@@ -30,7 +30,7 @@ import yaml
 from alfred.agents.base import AgentContext
 from alfred.agents.calendar.agent import CalendarAgent, CalendarConfig
 from alfred.agents.tasks.agent import TasksAgent
-from alfred.routing.clients import LiteLLMClient
+from scaffold.routing.clients import LiteLLMClient
 from scaffold.storage.database import Database
 from sim.in_memory_calendar import InMemoryCalendarClient
 

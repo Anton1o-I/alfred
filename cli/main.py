@@ -112,7 +112,7 @@ async def _run_simulation(
 
     from alfred.core.config import init_settings
     from alfred.observability import init_observability
-    from alfred.routing.clients import LiteLLMClient
+    from scaffold.routing.clients import LiteLLMClient
 
     settings = init_settings(Path("config"))
     init_observability()

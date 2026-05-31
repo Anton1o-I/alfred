@@ -48,7 +48,7 @@ from alfred.agents.tasks.specialists import SpecialistRegistry
 
 if TYPE_CHECKING:
     from alfred.agents.tasks.store import ChoreStore
-    from alfred.routing.clients import LiteLLMClient
+    from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
 tracer = trace.get_tracer("alfred.tasks.workflow")

@@ -5,9 +5,6 @@ from __future__ import annotations
 from langgraph.graph import END, StateGraph
 
 from alfred.agents.registry import AgentRegistry
-from alfred.audit.logger import AuditLogger
-from alfred.budget.policies import BudgetPolicy
-from alfred.budget.tracker import BudgetTracker
 from alfred.notifications.service import NotificationService
 from alfred.orchestrator.nodes import (
     create_agent_executor,
@@ -16,7 +13,10 @@ from alfred.orchestrator.nodes import (
     create_notifier,
 )
 from alfred.orchestrator.state import OrchestratorState
-from alfred.routing.clients import LiteLLMClient
+from scaffold.audit.logger import AuditLogger
+from scaffold.budget.policies import BudgetPolicy
+from scaffold.budget.tracker import BudgetTracker
+from scaffold.routing.clients import LiteLLMClient
 
 
 def should_check_budget(state: OrchestratorState) -> str:

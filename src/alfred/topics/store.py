@@ -6,8 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from scaffold.storage.database import Database
 from scaffold.core.constants import TopicPriority
+from scaffold.storage.database import Database
 
 
 class TopicInterest(BaseModel):

@@ -8,8 +8,8 @@ from typing import Any
 
 import structlog
 
-from scaffold.storage.database import Database
 from scaffold.core.models import TokenUsage
+from scaffold.storage.database import Database
 
 log = structlog.get_logger()
 

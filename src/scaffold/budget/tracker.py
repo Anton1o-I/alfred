@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from scaffold.storage.database import Database
 from scaffold.core.models import TokenUsage
+from scaffold.storage.database import Database
 
 
 class SpendSummary(BaseModel):

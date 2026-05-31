@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from alfred.budget.policies import BudgetPolicy
-from alfred.budget.tracker import BudgetTracker
 from alfred.core.config import BudgetConfig
-from scaffold.storage.database import Database
+from scaffold.budget.policies import BudgetPolicy
+from scaffold.budget.tracker import BudgetTracker
 from scaffold.core.models import TokenUsage
+from scaffold.storage.database import Database
 
 
 @pytest.fixture

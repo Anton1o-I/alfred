@@ -193,14 +193,14 @@ def test_resolve_persona_falls_back_to_empty() -> None:
 @pytest.mark.asyncio
 async def test_send_to_family_uses_persona_override(monkeypatch, tmp_path) -> None:
     """`persona_override` swaps the From-name on the outbound metadata."""
-    from alfred.audit.logger import AuditLogger
     from alfred.core.config import (
         NotificationConfig,
         RecipientConfig,
     )
     from alfred.notifications.service import NotificationService
-    from scaffold.storage.database import Database
+    from scaffold.audit.logger import AuditLogger
     from scaffold.core.constants import NotificationChannel
+    from scaffold.storage.database import Database
 
     db = Database(str(tmp_path / "t.db"))
     await db.initialize()

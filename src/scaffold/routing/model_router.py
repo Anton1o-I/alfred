@@ -12,7 +12,7 @@ import structlog
 
 from alfred.core.config import AgentConfig
 from scaffold.core.models import AgentRequest, LLMResponse
-from alfred.routing.clients import LiteLLMClient
+from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
 

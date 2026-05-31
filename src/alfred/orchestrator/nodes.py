@@ -9,13 +9,13 @@ import structlog
 
 from alfred.agents.base import AgentContext
 from alfred.agents.registry import AgentRegistry
-from alfred.audit.logger import AuditLogger
-from alfred.budget.policies import BudgetPolicy
-from alfred.budget.tracker import BudgetTracker
-from alfred.core.constants import AuditEventType
 from alfred.notifications.service import NotificationService
 from alfred.orchestrator.state import OrchestratorState
-from alfred.routing.clients import LiteLLMClient
+from scaffold.audit.logger import AuditLogger
+from scaffold.budget.policies import BudgetPolicy
+from scaffold.budget.tracker import BudgetTracker
+from scaffold.core.constants import AuditEventType
+from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
 
@@ -160,12 +160,21 @@ def create_agent_executor(
                 "agent_response": f"Sorry, I don't have an agent named '{target}' available.",
             }
 
+        # Email bodies are PII and routinely contain quoted thread content
+        # from third parties; don't persist any of that to the audit log.
+        # CLI/webhook messages are user-authored and lower risk — keep a
+        # short slice for traceability.
+        source = state.get("source", "")
+        if source == "email":
+            audit_message = "[redacted: source=email]"
+        else:
+            audit_message = state["user_message"][:80]
         await audit.log_event(
             event_type=AuditEventType.AGENT_DISPATCH,
             request_id=request_id,
             agent_name=target,
-            source=state.get("source", ""),
-            details={"user_message": state["user_message"][:200]},
+            source=source,
+            details={"user_message": audit_message},
         )
 
         start = time.monotonic()
