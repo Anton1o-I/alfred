@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.resources
+import os
 from pathlib import Path
 
 import aiosqlite
+
+_DB_FILE_MODE = 0o600
 
 
 class Database:
@@ -23,6 +27,15 @@ class Database:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
         await self._run_migrations()
+        # Audit log + chore history hold PII; default umask leaves the DB
+        # world-readable. Tighten after WAL has materialised the sidecars.
+        for path in (
+            self.db_path,
+            f"{self.db_path}-wal",
+            f"{self.db_path}-shm",
+        ):
+            with contextlib.suppress(FileNotFoundError):
+                os.chmod(path, _DB_FILE_MODE)
 
     async def _run_migrations(self) -> None:
         """Run all SQL migration files in order."""
@@ -35,7 +48,7 @@ class Database:
         await self._db.commit()
 
         migrations_dir = (
-            Path(importlib.resources.files("alfred")) / "storage" / "migrations"
+            Path(importlib.resources.files("scaffold")) / "storage" / "migrations"
         )
         if not migrations_dir.exists():
             return

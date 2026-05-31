@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 if TYPE_CHECKING:
-    from alfred.storage.database import Database
+    from scaffold.storage.database import Database
 
 log = structlog.get_logger()
 

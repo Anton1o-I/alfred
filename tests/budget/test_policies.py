@@ -7,8 +7,8 @@ import pytest
 from alfred.budget.policies import BudgetPolicy
 from alfred.budget.tracker import BudgetTracker
 from alfred.core.config import BudgetConfig
+from scaffold.storage.database import Database
 from scaffold.core.models import TokenUsage
-from alfred.storage.database import Database
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from alfred.core.config import BudgetConfig
-from alfred.storage.database import Database
+from scaffold.storage.database import Database
 
 
 class BudgetDecision(BaseModel):

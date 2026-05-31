@@ -18,7 +18,7 @@ from alfred.notifications.channels.imessage import BlueBubblesClient
 from alfred.notifications.service import NotificationService
 from alfred.orchestrator.orchestrator import Orchestrator
 from alfred.routing.clients import LiteLLMClient
-from alfred.storage.database import Database
+from scaffold.storage.database import Database
 from alfred.topics.store import TopicStore
 from scaffold.tools.registry import ToolRegistry
 

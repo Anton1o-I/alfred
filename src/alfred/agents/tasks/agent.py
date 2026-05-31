@@ -11,7 +11,7 @@ from alfred.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.tasks.store import ChoreStore
 from alfred.agents.tasks.workflow import build_tasks_graph
 from alfred.routing.clients import LiteLLMClient
-from alfred.storage.database import Database
+from scaffold.storage.database import Database
 from scaffold.core.models import TokenUsage
 
 _tracer = trace.get_tracer("alfred.tasks.agent")
