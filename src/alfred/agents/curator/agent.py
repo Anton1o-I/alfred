@@ -17,7 +17,6 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from scaffold.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.curator.render import (
     render_comparison,
     render_digest,
@@ -30,6 +29,7 @@ from alfred.agents.curator.sources import (
 )
 from alfred.observability_helpers import llm_span, record_tokens
 from alfred.prompts import load_prompt
+from scaffold.agents.base import AgentBase, AgentContext, AgentResult
 from scaffold.core.models import TokenUsage
 from scaffold.routing.clients import LiteLLMClient
 

@@ -5,17 +5,17 @@ from __future__ import annotations
 from langgraph.graph import END, StateGraph
 
 from scaffold.agents.registry import AgentRegistry
-from alfred.orchestrator.nodes import (
+from scaffold.audit.logger import AuditLogger
+from scaffold.budget.policies import BudgetPolicy
+from scaffold.budget.tracker import BudgetTracker
+from scaffold.notifications.service import NotificationService
+from scaffold.orchestrator.nodes import (
     create_agent_executor,
     create_budget_checker,
     create_intent_classifier,
     create_notifier,
 )
-from alfred.orchestrator.state import OrchestratorState
-from scaffold.audit.logger import AuditLogger
-from scaffold.budget.policies import BudgetPolicy
-from scaffold.budget.tracker import BudgetTracker
-from scaffold.notifications.service import NotificationService
+from scaffold.orchestrator.state import OrchestratorState
 from scaffold.routing.clients import LiteLLMClient
 
 
@@ -48,6 +48,7 @@ def build_orchestrator_graph(
     budget_tracker: BudgetTracker,
     audit_logger: AuditLogger,
     notification_service: NotificationService,
+    intent_classifier_model: str = "local-default",
 ) -> StateGraph:
     """Build the LangGraph orchestrator.
 
@@ -57,7 +58,7 @@ def build_orchestrator_graph(
             -> no: respond with budget error
     """
     # Create node functions with injected dependencies
-    classify = create_intent_classifier(client, registry)
+    classify = create_intent_classifier(client, registry, intent_classifier_model)
     check_budget = create_budget_checker(budget_policy, audit_logger)
     execute = create_agent_executor(registry, budget_tracker, audit_logger)
     notify = create_notifier(notification_service)

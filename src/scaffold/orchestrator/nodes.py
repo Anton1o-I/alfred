@@ -9,19 +9,29 @@ import structlog
 
 from scaffold.agents.base import AgentContext
 from scaffold.agents.registry import AgentRegistry
-from alfred.orchestrator.state import OrchestratorState
 from scaffold.audit.logger import AuditLogger
 from scaffold.budget.policies import BudgetPolicy
 from scaffold.budget.tracker import BudgetTracker
 from scaffold.core.constants import AuditEventType
 from scaffold.notifications.service import NotificationService
+from scaffold.orchestrator.state import OrchestratorState
 from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
 
 
-def create_intent_classifier(client: LiteLLMClient, registry: AgentRegistry):
-    """Create the intent classification node."""
+def create_intent_classifier(
+    client: LiteLLMClient,
+    registry: AgentRegistry,
+    model: str = "local-default",
+):
+    """Create the intent classification node.
+
+    `model` is the LiteLLM alias used for the routing call — kept local
+    by default since classification is cheap and runs on every request.
+    Wired from `Settings.orchestrator.intent_classifier_model` so an
+    operator can override without code changes.
+    """
 
     async def classify_intent(state: OrchestratorState) -> dict[str, Any]:
         """Classify the user's intent and select the target agent."""
@@ -38,10 +48,9 @@ def create_intent_classifier(client: LiteLLMClient, registry: AgentRegistry):
             f"- {a['name']}: {a['description']}" for a in agents
         )
 
-        # Use local model for classification (zero cost)
         response = await client.complete(
             messages=[{"role": "user", "content": state["user_message"]}],
-            model="local-default",
+            model=model,
             system=(
                 "You are a request router. Given the user's message, select the most "
                 "appropriate agent to handle it. Respond with ONLY the agent name, "

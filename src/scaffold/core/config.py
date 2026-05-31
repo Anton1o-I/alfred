@@ -136,6 +136,14 @@ class InboxConfig(BaseModel):
     enabled: bool = False  # Set true once OAuth has gmail.modify scope
 
 
+class OrchestratorConfig(BaseModel):
+    """Settings for the LangGraph orchestrator."""
+
+    # LiteLLM model alias used for cheap intent classification before
+    # the request is routed to a specialized agent.
+    intent_classifier_model: str = "local-default"
+
+
 class Settings(BaseModel):
     """Root configuration object."""
 
@@ -144,6 +152,7 @@ class Settings(BaseModel):
     budget: BudgetConfig = BudgetConfig()
     notifications: NotificationConfig = NotificationConfig()
     inbox: InboxConfig = InboxConfig()
+    orchestrator: OrchestratorConfig = OrchestratorConfig()
     scheduled_tasks: list[ScheduledTaskConfig] = []
     database_path: str = "data/alfred.db"
     log_level: str = "INFO"

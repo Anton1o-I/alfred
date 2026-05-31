@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from alfred.orchestrator.nodes import _keyword_fallback
+from scaffold.orchestrator.nodes import _keyword_fallback
 
 
 def test_keyword_fallback_returns_empty_when_no_match() -> None:

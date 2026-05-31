@@ -5,14 +5,14 @@ from __future__ import annotations
 import structlog
 
 from scaffold.agents.registry import AgentRegistry
-from alfred.orchestrator.graph import build_orchestrator_graph
-from alfred.orchestrator.state import OrchestratorState
 from scaffold.audit.logger import AuditLogger
 from scaffold.budget.policies import BudgetPolicy
 from scaffold.budget.tracker import BudgetTracker
 from scaffold.core.constants import AgentStatus
 from scaffold.core.models import AgentRequest, AgentResponse
 from scaffold.notifications.service import NotificationService
+from scaffold.orchestrator.graph import build_orchestrator_graph
+from scaffold.orchestrator.state import OrchestratorState
 from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
@@ -29,6 +29,7 @@ class Orchestrator:
         budget_tracker: BudgetTracker,
         audit_logger: AuditLogger,
         notification_service: NotificationService,
+        intent_classifier_model: str = "local-default",
     ) -> None:
         graph = build_orchestrator_graph(
             client=client,
@@ -37,6 +38,7 @@ class Orchestrator:
             budget_tracker=budget_tracker,
             audit_logger=audit_logger,
             notification_service=notification_service,
+            intent_classifier_model=intent_classifier_model,
         )
         self._graph = graph.compile()
         self._registry = registry

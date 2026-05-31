@@ -16,10 +16,10 @@ import structlog
 import yaml
 from opentelemetry import trace
 
-from scaffold.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.calendar.google_client import GoogleCalendarClient
 from alfred.agents.calendar.icloud_client import IcloudCalendarClient
 from alfred.agents.calendar.workflow import build_calendar_graph
+from scaffold.agents.base import AgentBase, AgentContext, AgentResult
 from scaffold.core.models import TokenUsage
 from scaffold.routing.clients import LiteLLMClient
 

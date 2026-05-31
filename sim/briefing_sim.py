@@ -33,17 +33,17 @@ from alfred.agents.tasks.renderers import (
     render_chores_plain,
 )
 from alfred.agents.tasks.store import Chore, ChoreStatus
-from alfred.notifications.signature import (
-    append_to_body,
-    append_to_html,
-    render_signature,
-)
 from alfred.routines._common import (
     _make_narrative_agent,
     _render_chores_for_prompt,
     _render_email,
 )
 from alfred.routines.daily_briefing import _DAILY_PROMPT, DailyNarrative
+from alfred.signature import (
+    append_to_body,
+    append_to_html,
+    render_signature,
+)
 from scaffold.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()

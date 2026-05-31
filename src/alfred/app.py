@@ -9,15 +9,15 @@ from typing import Any
 
 import structlog
 
-from scaffold.agents.registry import AgentRegistry
-from alfred.orchestrator.orchestrator import Orchestrator
 from alfred.topics.store import TopicStore
+from scaffold.agents.registry import AgentRegistry
 from scaffold.audit.logger import AuditLogger
 from scaffold.budget.policies import BudgetPolicy
 from scaffold.budget.tracker import BudgetTracker
 from scaffold.core.config import Settings, init_settings
 from scaffold.notifications.channels.imessage import BlueBubblesClient
 from scaffold.notifications.service import NotificationService
+from scaffold.orchestrator.orchestrator import Orchestrator
 from scaffold.routing.clients import LiteLLMClient
 from scaffold.storage.database import Database
 from scaffold.tools.registry import ToolRegistry
@@ -123,6 +123,7 @@ async def create_app(config_dir: Path = Path("config")) -> App:
         budget_tracker=budget_tracker,
         audit_logger=audit_logger,
         notification_service=notification_service,
+        intent_classifier_model=settings.orchestrator.intent_classifier_model,
     )
 
     # 9. Inbox poller (optional — iCloud IMAP with app-specific password)
