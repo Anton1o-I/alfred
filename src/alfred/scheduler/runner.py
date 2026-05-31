@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from opentelemetry import trace
 
 from alfred.core.constants import RequestSource
 from alfred.core.models import AgentRequest
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     from alfred.core.config import ScheduledTaskConfig
 
 log = structlog.get_logger()
+_tracer = trace.get_tracer("alfred.scheduler.runner")
 
 
 async def _email_curator_digest(
@@ -36,28 +38,38 @@ async def _email_curator_digest(
         render_signature,
     )
 
-    body = Path(digest_path).read_text()
-    subject = f"Alfred Research Digest — {datetime.now(UTC).strftime('%Y-%m-%d')}"
-    cfg = app.settings.notifications
-    from_name = cfg.email_from_names_by_agent.get("curator")
-    tagline = cfg.email_taglines_by_agent.get("curator", "")
-    sig_plain, sig_html = render_signature(from_name or "", tagline)
-    body = append_to_body(body, sig_plain)
-    html_body_with_sig = append_to_html(html_body, sig_html) if html_body else None
+    with _tracer.start_as_current_span("curator.email") as span:
+        span.set_attribute("alfred.request_id", request_id)
+        span.set_attribute("alfred.curator.digest_path", digest_path)
+        span.set_attribute("alfred.curator.html_present", bool(html_body))
 
-    results = await app.notification_service.send_to_family(
-        body=body,
-        subject=subject,
-        html_body=html_body_with_sig,
-        request_id=request_id,
-        from_name=from_name,
-        agent_name="curator",
-    )
-    for r in results:
-        if not r.success:
-            log.warning(
-                "curator_email_failed", channel=r.channel, error=r.error
-            )
+        body = Path(digest_path).read_text()
+        subject = f"Alfred Research Digest — {datetime.now(UTC).strftime('%Y-%m-%d')}"
+        cfg = app.settings.notifications
+        from_name = cfg.email_from_names_by_agent.get("curator")
+        tagline = cfg.email_taglines_by_agent.get("curator", "")
+        sig_plain, sig_html = render_signature(from_name or "", tagline)
+        body = append_to_body(body, sig_plain)
+        html_body_with_sig = append_to_html(html_body, sig_html) if html_body else None
+
+        results = await app.notification_service.send_to_family(
+            body=body,
+            subject=subject,
+            html_body=html_body_with_sig,
+            request_id=request_id,
+            from_name=from_name,
+            agent_name="curator",
+        )
+        successes = sum(1 for r in results if r.success)
+        failures = sum(1 for r in results if not r.success)
+        span.set_attribute("alfred.curator.recipients", len(results))
+        span.set_attribute("alfred.curator.delivered", successes)
+        span.set_attribute("alfred.curator.failed", failures)
+        for r in results:
+            if not r.success:
+                log.warning(
+                    "curator_email_failed", channel=r.channel, error=r.error
+                )
 
 
 async def run_routine(
@@ -108,21 +120,26 @@ async def run_routine(
         if not isinstance(agent, CuratorAgent):
             log.error("curator_not_registered")
             return
-        result = await agent.generate_digest(
-            model_name="cloud-default",
-            request_id=f"{task.name}-direct",
-            compare_with="local-default" if compare else None,
-            max_candidates=max_items,
-        )
-        path = result.data.get("path")
-        log.info("routine_finish", task=task.name, status="success", path=path)
-        if not compare and path:
-            await _email_curator_digest(
-                app,
-                path,
-                html_body=result.data.get("html"),
+        # Parent span so the digest LLM calls + the email step land in one
+        # Phoenix trace tree instead of as N siblings.
+        with _tracer.start_as_current_span("routine.curator") as routine_span:
+            routine_span.set_attribute("alfred.task", task.name)
+            routine_span.set_attribute("alfred.compare", compare)
+            result = await agent.generate_digest(
+                model_name="cloud-default",
                 request_id=f"{task.name}-direct",
+                compare_with="local-default" if compare else None,
+                max_candidates=max_items,
             )
+            path = result.data.get("path")
+            log.info("routine_finish", task=task.name, status="success", path=path)
+            if not compare and path:
+                await _email_curator_digest(
+                    app,
+                    path,
+                    html_body=result.data.get("html"),
+                    request_id=f"{task.name}-direct",
+                )
         return
 
     request = AgentRequest(

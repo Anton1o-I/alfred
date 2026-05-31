@@ -11,6 +11,7 @@ from typing import Any
 
 import structlog
 import yaml
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -33,6 +34,7 @@ from alfred.prompts import load_prompt
 from alfred.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()
+_tracer = trace.get_tracer("alfred.curator.agent")
 
 
 # ── Configuration loading ────────────────────────────────────
@@ -296,6 +298,30 @@ class CuratorAgent(AgentBase):
 
         If compare_with is set, also run that second model and emit an A/B file.
         """
+        with _tracer.start_as_current_span("curator.digest") as span:
+            span.set_attribute("openinference.span.kind", "AGENT")
+            span.set_attribute("alfred.agent", "curator")
+            span.set_attribute("alfred.request_id", request_id)
+            span.set_attribute("alfred.model", model_name)
+            if compare_with:
+                span.set_attribute("alfred.compare_with", compare_with)
+            return await self._generate_digest_inner(
+                model_name=model_name,
+                request_id=request_id,
+                compare_with=compare_with,
+                max_candidates=max_candidates,
+                span=span,
+            )
+
+    async def _generate_digest_inner(
+        self,
+        *,
+        model_name: str,
+        request_id: str,
+        compare_with: str | None,
+        max_candidates: int | None,
+        span: trace.Span,
+    ) -> AgentResult:
         cfg = self._config
         log.info(
             "curator_start", model=model_name, compare_with=compare_with, sources=len(cfg.sources)
@@ -454,6 +480,9 @@ class CuratorAgent(AgentBase):
 
         outfile.write_text(md)
         log.info("curator_digest_written", path=str(outfile), items=len(top))
+        span.set_attribute("alfred.curator.items_fetched", len(candidates))
+        span.set_attribute("alfred.curator.items_surfaced", len(top))
+        span.set_attribute("alfred.curator.output_path", str(outfile))
 
         return AgentResult(
             message=(
