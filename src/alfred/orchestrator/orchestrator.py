@@ -8,8 +8,8 @@ from alfred.agents.registry import AgentRegistry
 from alfred.audit.logger import AuditLogger
 from alfred.budget.policies import BudgetPolicy
 from alfred.budget.tracker import BudgetTracker
-from alfred.core.constants import AgentStatus
-from alfred.core.models import AgentRequest, AgentResponse
+from scaffold.core.constants import AgentStatus
+from scaffold.core.models import AgentRequest, AgentResponse
 from alfred.notifications.service import NotificationService
 from alfred.orchestrator.graph import build_orchestrator_graph
 from alfred.orchestrator.state import OrchestratorState

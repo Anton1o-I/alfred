@@ -15,7 +15,6 @@ from alfred.agents.tasks.renderers import (
     shame_tier,
 )
 
-
 # Mirrors the production YAML so tier ranges stay realistic in tests.
 TIERS: list[dict[str, Any]] = [
     {"tier": 1, "min_days": 2, "max_days": 5, "fallback_label": "{days}d overdue",

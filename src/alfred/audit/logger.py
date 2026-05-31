@@ -8,7 +8,7 @@ from typing import Any
 
 import structlog
 
-from alfred.core.models import TokenUsage
+from scaffold.core.models import TokenUsage
 from alfred.storage.database import Database
 
 log = structlog.get_logger()

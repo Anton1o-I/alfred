@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from alfred.core.constants import NotificationChannel
+from scaffold.core.constants import NotificationChannel
 
 
 class Notification(BaseModel):

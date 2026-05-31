@@ -198,7 +198,7 @@ async def test_send_to_family_uses_persona_override(monkeypatch, tmp_path) -> No
         NotificationConfig,
         RecipientConfig,
     )
-    from alfred.core.constants import NotificationChannel
+    from scaffold.core.constants import NotificationChannel
     from alfred.notifications.service import NotificationService
     from alfred.storage.database import Database
 

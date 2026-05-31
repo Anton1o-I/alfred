@@ -9,7 +9,7 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, Field
 
-from alfred.core.models import TokenUsage
+from scaffold.core.models import TokenUsage
 
 log = structlog.get_logger()
 

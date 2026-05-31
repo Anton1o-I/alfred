@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from alfred.core.constants import AgentStatus, RequestSource
+from scaffold.core.constants import AgentStatus, RequestSource
 
 
 class TokenUsage(BaseModel):

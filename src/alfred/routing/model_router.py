@@ -11,7 +11,7 @@ from typing import Any
 import structlog
 
 from alfred.core.config import AgentConfig
-from alfred.core.models import AgentRequest, LLMResponse
+from scaffold.core.models import AgentRequest, LLMResponse
 from alfred.routing.clients import LiteLLMClient
 
 log = structlog.get_logger()

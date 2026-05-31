@@ -19,8 +19,8 @@ from alfred.notifications.service import NotificationService
 from alfred.orchestrator.orchestrator import Orchestrator
 from alfred.routing.clients import LiteLLMClient
 from alfred.storage.database import Database
-from scaffold.tools.registry import ToolRegistry
 from alfred.topics.store import TopicStore
+from scaffold.tools.registry import ToolRegistry
 
 log = structlog.get_logger()
 

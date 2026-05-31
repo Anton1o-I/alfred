@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from alfred.tools.base import Tool
+from scaffold.tools.base import Tool
 
 
 class ToolRegistry:

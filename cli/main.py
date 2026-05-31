@@ -287,8 +287,8 @@ async def _get_app():
 
 
 async def _chat_loop() -> None:
-    from alfred.core.constants import RequestSource
-    from alfred.core.models import AgentRequest
+    from scaffold.core.constants import RequestSource
+    from scaffold.core.models import AgentRequest
 
     app = await _get_app()
     click.echo("Alfred interactive mode. Type 'quit' to exit.\n")
@@ -318,8 +318,8 @@ async def _chat_loop() -> None:
 
 
 async def _ask(message: str) -> None:
-    from alfred.core.constants import RequestSource
-    from alfred.core.models import AgentRequest
+    from scaffold.core.constants import RequestSource
+    from scaffold.core.models import AgentRequest
 
     app = await _get_app()
     try:
@@ -389,7 +389,7 @@ async def _show_topics() -> None:
 async def _add_topic(name: str, priority: str) -> None:
     app = await _get_app()
     try:
-        from alfred.core.constants import TopicPriority
+        from scaffold.core.constants import TopicPriority
 
         topic = await app.topic_store.add(name, TopicPriority(priority), added_by="cli")
         click.echo(f"Added topic: [{topic.priority}] {topic.name}")

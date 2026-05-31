@@ -19,15 +19,6 @@ class BudgetExceededError(HomeAgentError):
         )
 
 
-class ToolAccessDeniedError(HomeAgentError):
-    """Agent attempted to use a tool not in its allowlist."""
-
-    def __init__(self, agent: str, tool: str) -> None:
-        self.agent = agent
-        self.tool = tool
-        super().__init__(f"Agent '{agent}' is not allowed to use tool '{tool}'")
-
-
 class AgentTimeoutError(HomeAgentError):
     """Agent execution exceeded its timeout."""
 

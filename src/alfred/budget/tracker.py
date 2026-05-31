@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from alfred.core.models import TokenUsage
+from scaffold.core.models import TokenUsage
 from alfred.storage.database import Database
 
 

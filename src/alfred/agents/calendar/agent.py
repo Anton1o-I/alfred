@@ -20,8 +20,8 @@ from alfred.agents.base import AgentBase, AgentContext, AgentResult
 from alfred.agents.calendar.google_client import GoogleCalendarClient
 from alfred.agents.calendar.icloud_client import IcloudCalendarClient
 from alfred.agents.calendar.workflow import build_calendar_graph
-from alfred.core.models import TokenUsage
 from alfred.routing.clients import LiteLLMClient
+from scaffold.core.models import TokenUsage
 
 _tracer = trace.get_tracer("alfred.calendar.agent")
 

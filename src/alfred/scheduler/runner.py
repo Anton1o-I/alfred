@@ -11,8 +11,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from opentelemetry import trace
 
-from alfred.core.constants import RequestSource
-from alfred.core.models import AgentRequest
+from scaffold.core.constants import RequestSource
+from scaffold.core.models import AgentRequest
 
 if TYPE_CHECKING:
     from alfred.app import App

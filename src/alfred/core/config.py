@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
-from alfred.core.constants import ModelPreference, NotificationChannel
+from scaffold.core.constants import ModelPreference, NotificationChannel
 
 
 class LiteLLMConfig(BaseModel):

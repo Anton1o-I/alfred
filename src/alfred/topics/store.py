@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from alfred.core.constants import TopicPriority
+from scaffold.core.constants import TopicPriority
 from alfred.storage.database import Database
 
 
